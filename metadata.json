@@ -1,0 +1,6 @@
+{
+  "name": "ClipGenie",
+  "description": "Turn any YouTube video into viral 9:16 short clips ready for YouTube Shorts, Instagram Reels, and Facebook Reels.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

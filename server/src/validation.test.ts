@@ -1,0 +1,303 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  isValidJobId,
+  parseCanonicalYouTubeUrl,
+  sanitizeDownloadSlug,
+  validateCreateJobRequest,
+  validateSelectedMoments,
+} from './validation.js';
+import { isValidProxyUrl, parseSubtitlesToSegments } from './services/ytdlp.js';
+import { buildAssSubtitles } from './services/ffmpeg.js';
+import { InMemoryJobStore } from './queue/jobStore.js';
+import { InMemoryClipQueue } from './queue/jobQueue.js';
+import {
+  buildYouTubeCookieHeaders,
+  isTrustedGoogleVideoStreamUrl,
+  parseDescriptionChapters,
+  parseNetscapeCookies,
+  parseTimedTextXml,
+} from './services/youtubeFetch.js';
+import { selectBestMomentsLocally, topUpMomentsToCount } from './services/momentSelector.js';
+
+test('parseTimedTextXml extracts format-3 and legacy YouTube captions cleanly', () => {
+  const xml = `<?xml version="1.0" encoding="utf-8" ?><timedtext format="3"><body><p t="18640" d="3240">We&#39;re no strangers to love</p><p t="22640" d="4320">You know the rules &amp; so do I</p></body></timedtext>`;
+  const segs = parseTimedTextXml(xml);
+  assert.equal(segs.length, 2);
+  assert.equal(segs[0].start, 18.64);
+  assert.equal(segs[0].text, "We're no strangers to love");
+  assert.equal(segs[1].text, 'You know the rules & so do I');
+});
+
+test('parseDescriptionChapters extracts timestamped chapters from description', () => {
+  const desc = 'Intro note\n0:00 Opening Hook\n1:15 Deep Dive Strategy\n03:40 Final Takeaway';
+  const chapters = parseDescriptionChapters(desc);
+  assert.equal(chapters.length, 3);
+  assert.deepEqual(chapters[1], { start: 75, title: 'Deep Dive Strategy' });
+});
+
+test('isTrustedGoogleVideoStreamUrl strictly permits HTTPS googlevideo.com hosts', () => {
+  assert.equal(
+    isTrustedGoogleVideoStreamUrl('https://rr3---sn-a5mlrnzk.googlevideo.com/videoplayback?id=1'),
+    true
+  );
+  assert.equal(isTrustedGoogleVideoStreamUrl('http://rr3.googlevideo.com/video'), false);
+  assert.equal(isTrustedGoogleVideoStreamUrl('https://evil-googlevideo.com/video'), false);
+  assert.equal(isTrustedGoogleVideoStreamUrl('https://127.0.0.1/video'), false);
+});
+
+test('selectBestMomentsLocally picks non-overlapping real-transcript moments with valid lengths', () => {
+  const transcript = Array.from({ length: 24 }, (_, idx) => ({
+    start: idx * 5,
+    end: (idx + 1) * 5,
+    text: idx % 4 === 0 ? 'Why do most creators miss this secret hook?' : 'Keep your pacing tight and clear.',
+  }));
+
+  const moments = selectBestMomentsLocally({
+    transcript,
+    chapters: [],
+    clipLength: 15,
+    clipCount: 3,
+    videoDuration: 120,
+    videoTitle: 'Creator Growth Masterclass',
+    author: 'Studio Lab',
+  });
+
+  assert.equal(moments.length, 3);
+  for (let i = 0; i < moments.length; i++) {
+    const dur = moments[i].end - moments[i].start;
+    assert.ok(dur >= 13 && dur <= 17, `Expected 15+/-2s, got ${dur}`);
+    for (let j = i + 1; j < moments.length; j++) {
+      assert.ok(
+        moments[i].end <= moments[j].start || moments[j].end <= moments[i].start,
+        'Moments must not overlap'
+      );
+    }
+  }
+});
+
+test('parseCanonicalYouTubeUrl canonicalizes valid URLs and rejects SSRF targets', () => {
+  const ok = parseCanonicalYouTubeUrl('https://youtu.be/dQw4w9WgXcQ?si=test');
+  assert.equal(ok.valid, true);
+  assert.equal(ok.canonicalUrl, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+
+  const shorts = parseCanonicalYouTubeUrl('https://www.youtube.com/shorts/AbCdEf_1234');
+  assert.equal(shorts.valid, true);
+  assert.equal(shorts.canonicalUrl, 'https://www.youtube.com/watch?v=AbCdEf_1234');
+
+  // Block SSRF, metadata IPs, file://, and arbitrary domains
+  assert.equal(parseCanonicalYouTubeUrl('http://169.254.169.254/latest/meta-data/').valid, false);
+  assert.equal(parseCanonicalYouTubeUrl('http://localhost:6379/watch?v=dQw4w9WgXcQ').valid, false);
+  assert.equal(parseCanonicalYouTubeUrl('file:///etc/passwd').valid, false);
+  assert.equal(parseCanonicalYouTubeUrl('https://evil-youtube.com/watch?v=dQw4w9WgXcQ').valid, false);
+});
+
+test('validateCreateJobRequest validates clipLength, clipCount, captions, and URL', () => {
+  const valid = validateCreateJobRequest({
+    url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    clipLength: 15,
+    clipCount: 4,
+    captions: false,
+  });
+  assert.equal(valid.success, true);
+  if (valid.success) {
+    assert.equal(valid.data.clipLength, 15);
+    assert.equal(valid.data.clipCount, 4);
+    assert.equal(valid.data.captions, false);
+  }
+
+  const badLength = validateCreateJobRequest({
+    url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    clipLength: 45,
+    clipCount: 3,
+    captions: true,
+  });
+  assert.equal(badLength.success, false);
+
+  const badCount = validateCreateJobRequest({
+    url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    clipLength: 30,
+    clipCount: 8,
+    captions: true,
+  });
+  assert.equal(badCount.success, false);
+});
+
+test('isValidJobId strictly accepts UUIDs', () => {
+  assert.equal(isValidJobId('550e8400-e29b-41d4-a716-446655440000'), true);
+  assert.equal(isValidJobId('../etc/passwd'), false);
+  assert.equal(isValidJobId('not-a-uuid'), false);
+});
+
+test('validateSelectedMoments enforces clipLength +/-2s tolerance and eliminates overlaps', () => {
+  const moments = validateSelectedMoments(
+    [
+      { start: 10, end: 40, title: 'Top Hook', caption: 'Cap 1', score: 95 },
+      // Overlaps with Top Hook — must be dropped
+      { start: 30, end: 60, title: 'Overlapping', caption: 'Cap 2', score: 90 },
+      // Invalid duration (5s) — must be dropped
+      { start: 70, end: 75, title: 'Too Short', caption: 'Cap 3', score: 99 },
+      // Valid 29s moment (within 30 +/- 2s)
+      { start: 100, end: 129, title: 'Strong Insight', caption: 'Cap 4', score: 88 },
+    ],
+    30,
+    3,
+    300
+  );
+
+  assert.equal(moments.length, 2);
+  assert.equal(moments[0].title, 'Top Hook');
+  assert.equal(moments[1].title, 'Strong Insight');
+});
+
+test('parseSubtitlesToSegments parses VTT and deduplicates adjacent lines', () => {
+  const vtt = [
+    'WEBVTT',
+    '',
+    '00:00:01.000 --> 00:00:03.500 align:start position:0%',
+    'Hello <c>world</c>',
+    '',
+    '00:00:03.500 --> 00:00:05.000',
+    'Hello world',
+    '',
+    '00:00:05.000 --> 00:00:08.250',
+    'Second sentence here.',
+  ].join('\n');
+
+  const segments = parseSubtitlesToSegments(vtt);
+  assert.equal(segments.length, 2);
+  assert.deepEqual(segments[0], { start: 1, end: 5, text: 'Hello world' });
+  assert.deepEqual(segments[1], { start: 5, end: 8.25, text: 'Second sentence here.' });
+});
+
+test('buildAssSubtitles emits relative lower-third dialogue lines within clip bounds', () => {
+  const ass = buildAssSubtitles(
+    [
+      { start: 5, end: 9, text: 'Before clip' },
+      { start: 10, end: 13.5, text: 'First hook line' },
+      { start: 14, end: 18, text: 'Second punchline' },
+      { start: 35, end: 40, text: 'After clip' },
+    ],
+    10,
+    25
+  );
+
+  assert.ok(ass.includes('PlayResX: 1080'));
+  assert.ok(ass.includes('PlayResY: 1920'));
+  assert.ok(ass.includes('Dialogue: 0,0:00:00.00,0:00:03.50,LowerThird,,0,0,0,,FIRST HOOK LINE'));
+  assert.ok(ass.includes('Dialogue: 0,0:00:04.00,0:00:08.00,LowerThird,,0,0,0,,SECOND PUNCHLINE'));
+  assert.ok(!ass.includes('BEFORE CLIP'));
+  assert.ok(!ass.includes('AFTER CLIP'));
+});
+
+test('InMemoryJobStore and InMemoryClipQueue process queued jobs in order', async () => {
+  const store = new InMemoryJobStore();
+  const processed: string[] = [];
+
+  const queue = new InMemoryClipQueue(async (jobId) => {
+    await store.updateProgress(jobId, { status: 'processing', step: 'Transcribing', progress: 50 });
+    processed.push(jobId);
+    await store.updateProgress(jobId, { status: 'done', step: 'Done', progress: 100 });
+  });
+
+  const jobId = '550e8400-e29b-41d4-a716-446655440000';
+  await store.create(jobId, {
+    url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    clipLength: 30,
+    clipCount: 3,
+    captions: true,
+  });
+
+  await queue.enqueue(jobId);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  const finished = await store.get(jobId);
+  assert.deepEqual(processed, [jobId]);
+  assert.equal(finished?.status, 'done');
+  assert.equal(finished?.progress, 100);
+  await queue.close();
+});
+
+test('topUpMomentsToCount tops up 2 AI moments to 5 non-overlapping clips when video duration allows', () => {
+  const transcript = Array.from({ length: 42 }, (_, idx) => ({
+    start: idx * 5,
+    end: (idx + 1) * 5,
+    text: `Segment ${idx + 1} delivers a crisp takeaway for viewers.`,
+  }));
+
+  const moments = topUpMomentsToCount({
+    existing: [
+      { start: 18, end: 48, title: 'AI Hook 1', caption: 'Cap 1', score: 96 },
+      { start: 60, end: 90, title: 'AI Hook 2', caption: 'Cap 2', score: 93 },
+    ],
+    transcript,
+    chapters: [],
+    clipLength: 30,
+    clipCount: 5,
+    videoDuration: 213,
+    videoTitle: 'Full Length Test Video',
+    author: 'Test Creator',
+  });
+
+  assert.equal(moments.length, 5);
+  for (let i = 0; i < moments.length; i++) {
+    const dur = moments[i].end - moments[i].start;
+    assert.ok(dur >= 28 && dur <= 32, `Expected ~30s clip, got ${dur}s`);
+    for (let j = i + 1; j < moments.length; j++) {
+      assert.ok(
+        moments[i].end <= moments[j].start || moments[j].end <= moments[i].start,
+        `Clips ${i} and ${j} must not overlap`
+      );
+    }
+  }
+});
+
+test('validateSelectedMoments normalizes slightly off-target durations to clipLength instead of dropping', () => {
+  const moments = validateSelectedMoments(
+    [
+      // 24s moment for clipLength=30 should normalize to 30s (within bounds) instead of being dropped
+      { start: 10, end: 34, title: 'Slightly Short AI Clip', caption: 'Cap', score: 91 },
+      // 37s moment for clipLength=30 should trim to 30s
+      { start: 80, end: 117, title: 'Slightly Long AI Clip', caption: 'Cap 2', score: 89 },
+    ],
+    30,
+    3,
+    240
+  );
+
+  assert.equal(moments.length, 2);
+  assert.equal(moments[0].end - moments[0].start, 30);
+  assert.equal(moments[1].end - moments[1].start, 30);
+});
+
+test('sanitizeDownloadSlug strips traversal and header injection characters safely', () => {
+  assert.equal(sanitizeDownloadSlug('My "Viral"\r\nClip / ../../etc'), 'my-viral-clip-etc');
+  assert.equal(sanitizeDownloadSlug('   '), 'clipgenie-short');
+  assert.equal(sanitizeDownloadSlug(undefined), 'clipgenie-short');
+});
+
+test('parseNetscapeCookies & buildYouTubeCookieHeaders build SAPISIDHASH and filter to YouTube/Google domains', () => {
+  const sampleCookies = [
+    '# Netscape HTTP Cookie File',
+    '.youtube.com\tTRUE\t/\tTRUE\t1999999999\tSAPISID\ttest_sapisid_value',
+    '.youtube.com\tTRUE\t/\tTRUE\t1999999999\tSID\ttest_sid_value',
+    '.evil.com\tTRUE\t/\tTRUE\t1999999999\tSECRET\tshould_not_be_included',
+  ].join('\n');
+
+  const parsed = parseNetscapeCookies(sampleCookies);
+  assert.equal(parsed.length, 2);
+  const headers = buildYouTubeCookieHeaders(sampleCookies);
+  assert.ok(headers);
+  assert.ok(headers.cookieHeader.includes('SAPISID=test_sapisid_value'));
+  assert.ok(!headers.cookieHeader.includes('should_not_be_included'));
+  assert.match(headers.authorization ?? '', /^SAPISIDHASH \d+_[0-9a-f]{40}$/);
+});
+
+test('isValidProxyUrl accepts only http, https, and socks5 proxy schemes', () => {
+  assert.equal(isValidProxyUrl('http://user:pass@proxy.example.com:8080'), true);
+  assert.equal(isValidProxyUrl('socks5://127.0.0.1:1080'), true);
+  assert.equal(isValidProxyUrl('file:///etc/passwd'), false);
+  assert.equal(isValidProxyUrl('not-a-url'), false);
+});
+
+
