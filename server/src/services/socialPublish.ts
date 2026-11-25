@@ -128,6 +128,66 @@ export async function resolveClipMediaForPublish(params: {
   );
 }
 
+const YOUTUBE_TITLE_LIMIT = 100;
+const YOUTUBE_DESCRIPTION_LIMIT = 5000;
+const DEFAULT_VIRAL_SHORTS_HASHTAGS =
+  '#Shorts #Viral #Trending #YouTubeShorts #ViralShorts #FYP #MustWatch';
+
+/**
+ * Formats YouTube Shorts upload metadata honoring YouTube Studio's exact 100-char title
+ * and 5000-char description limits, ensuring viral hashtags and extracting snippet.tags.
+ */
+export function formatYouTubeUploadMetadata(params: {
+  title: string;
+  caption: string;
+}): { title: string; description: string; tags: string[] } {
+  let cleanTitle = params.title.replace(/\s+/g, ' ').trim() || 'ClipGenie Short #Shorts #Viral';
+  if (!/#[a-z0-9_]+/i.test(cleanTitle)) {
+    const suffix = ' #Shorts #Viral';
+    if (cleanTitle.length + suffix.length <= YOUTUBE_TITLE_LIMIT) {
+      cleanTitle = `${cleanTitle}${suffix}`;
+    } else if (cleanTitle.length + ' #Shorts'.length <= YOUTUBE_TITLE_LIMIT) {
+      cleanTitle = `${cleanTitle} #Shorts`;
+    }
+  }
+  cleanTitle = cleanTitle.slice(0, YOUTUBE_TITLE_LIMIT).trim();
+
+  let description = params.caption.trim();
+  const hasShortsTag = /#shorts\b/i.test(`${cleanTitle} ${description}`);
+  const hasAnyDescHashtag = /#[a-z0-9_]+/i.test(description);
+
+  if (!hasAnyDescHashtag) {
+    const spacer = description ? '\n\n' : '';
+    if (description.length + spacer.length + DEFAULT_VIRAL_SHORTS_HASHTAGS.length <= YOUTUBE_DESCRIPTION_LIMIT) {
+      description = `${description}${spacer}${DEFAULT_VIRAL_SHORTS_HASHTAGS}`;
+    }
+  } else if (!hasShortsTag) {
+    const spacer = description ? ' ' : '';
+    if (description.length + spacer.length + '#Shorts'.length <= YOUTUBE_DESCRIPTION_LIMIT) {
+      description = `${description}${spacer}#Shorts`;
+    }
+  }
+  description = description.slice(0, YOUTUBE_DESCRIPTION_LIMIT).trim();
+
+  // Extract clean YouTube video tags from hashtags (YouTube allows up to 500 chars total across tags)
+  const rawHashtags = `${cleanTitle} ${description}`.match(/#([A-Za-z0-9_]{2,30})/g) ?? [];
+  const tags: string[] = [];
+  const seen = new Set<string>();
+  let totalTagChars = 0;
+
+  for (const raw of rawHashtags) {
+    const tag = raw.slice(1);
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    if (totalTagChars + tag.length + 1 > 450 || tags.length >= 25) break;
+    seen.add(key);
+    tags.push(tag);
+    totalTagChars += tag.length + 1;
+  }
+
+  return { title: cleanTitle, description, tags };
+}
+
 /**
  * Publishes a vertical 9:16 MP4 directly to the user's connected YouTube channel as a Short
  * via the YouTube Data API v3 Resumable Upload protocol.
@@ -140,11 +200,10 @@ export async function publishToYouTubeShorts(params: {
   privacyStatus: YouTubePrivacyStatus;
 }): Promise<PublishResult> {
   const activeConn = await refreshYouTubeAccessToken(params.connection);
-  const cleanTitle = params.title.trim().slice(0, 95) || 'ClipGenie Short';
-  const hasShortsTag = /#shorts\b/i.test(`${cleanTitle} ${params.caption}`);
-  const description = hasShortsTag
-    ? params.caption.trim()
-    : `${params.caption.trim()}\n\n#Shorts`.trim();
+  const { title: cleanTitle, description, tags } = formatYouTubeUploadMetadata({
+    title: params.title,
+    caption: params.caption,
+  });
 
   // Step 1: Initiate resumable upload session
   const initRes = await fetch(
@@ -160,7 +219,8 @@ export async function publishToYouTubeShorts(params: {
       body: JSON.stringify({
         snippet: {
           title: cleanTitle,
-          description: description.slice(0, 4900),
+          description,
+          ...(tags.length > 0 ? { tags } : {}),
           categoryId: '22',
         },
         status: {

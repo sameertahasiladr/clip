@@ -29,8 +29,8 @@ const publishBodySchema = z.object({
   platform: z.enum(['youtube', 'instagram', 'facebook']),
   jobId: z.string().refine(isValidJobId, 'Invalid job ID'),
   clipIndex: z.number().int().min(1).max(MAX_CLIP_COUNT),
-  title: z.string().trim().min(1).max(120),
-  caption: z.string().trim().max(2200).default(''),
+  title: z.string().trim().min(1, 'Title is required').max(120),
+  caption: z.string().trim().max(5000).default(''),
   privacyStatus: z.enum(['public', 'unlisted', 'private']).default('public'),
 });
 
@@ -285,6 +285,14 @@ export function createSocialRouter(deps: { jobStore: JobStore }): express.Router
       }
 
       const { platform, jobId, clipIndex, title, caption, privacyStatus } = parsed.data;
+
+      if (platform === 'youtube' && title.length > 100) {
+        throw new AppError(
+          'YouTube title must be 100 characters or fewer.',
+          400,
+          'VALIDATION_ERROR'
+        );
+      }
 
       // Verify target platform is connected BEFORE reading media
       if (platform === 'youtube' && !session.youtube) {

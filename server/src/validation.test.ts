@@ -31,6 +31,7 @@ import {
   buildOAuthCallbackHtml,
   buildYouTubeOAuthUrl,
 } from './services/socialOAuth.js';
+import { formatYouTubeUploadMetadata } from './services/socialPublish.js';
 
 test('parseTimedTextXml extracts format-3 and legacy YouTube captions cleanly', () => {
   const xml = `<?xml version="1.0" encoding="utf-8" ?><timedtext format="3"><body><p t="18640" d="3240">We&#39;re no strangers to love</p><p t="22640" d="4320">You know the rules &amp; so do I</p></body></timedtext>`;
@@ -558,6 +559,30 @@ test('buildOAuthCallbackHtml escapes script breakout payloads safely', () => {
   assert.ok(html.includes('&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;'));
   assert.ok(html.includes('\\u003c/script\\u003e\\u003cscript\\u003ealert(1)\\u003c/script\\u003e'));
 });
+
+test('formatYouTubeUploadMetadata enforces 100-char title, 5000-char description, viral hashtags, and tags', () => {
+  const autoTagged = formatYouTubeUploadMetadata({
+    title: 'How Small Teams Ship Faster',
+    caption: 'Cut handoffs and keep engineers close to users.',
+  });
+  assert.ok(autoTagged.title.includes('#Shorts'));
+  assert.ok(autoTagged.title.includes('#Viral'));
+  assert.ok(autoTagged.title.length <= 100);
+  assert.ok(autoTagged.description.includes('#Trending'));
+  assert.ok(autoTagged.tags.includes('Shorts'));
+  assert.ok(autoTagged.tags.includes('Viral'));
+
+  const longDesc = 'A'.repeat(4950) + ' #Shorts #Viral';
+  const maxSized = formatYouTubeUploadMetadata({
+    title: 'Exact Custom Title #Shorts #MyTag',
+    caption: longDesc,
+  });
+  assert.equal(maxSized.title, 'Exact Custom Title #Shorts #MyTag');
+  assert.equal(maxSized.description.length, longDesc.length);
+  assert.ok(maxSized.description.length <= 5000);
+  assert.ok(maxSized.tags.includes('MyTag'));
+});
+
 
 
 

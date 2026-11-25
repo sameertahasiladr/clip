@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -10,6 +10,7 @@ import {
   Instagram,
   Link2,
   Loader2,
+  Pencil,
   X,
   Youtube,
 } from 'lucide-react';
@@ -28,7 +29,12 @@ import {
   triggerSynchronousDownload,
 } from '../utils/download';
 import { formatDuration, getViralityLabel } from '../utils/youtube';
+import {
+  buildDefaultYouTubeDescription,
+  buildDefaultYouTubeTitle,
+} from '../utils/youtubeMetadata';
 import { VerticalVideoPlayer } from './VerticalVideoPlayer';
+import { YouTubePublishModal } from './YouTubePublishModal';
 
 interface ClipCardProps {
   clip: ClipItem;
@@ -79,6 +85,19 @@ export function ClipCard({
   >({});
   const [publishError, setPublishError] = useState<string | null>(null);
 
+  // Editable YouTube Shorts metadata (100-char title with hashtags + 5000-char description with viral hashtags)
+  const [isYouTubeModalOpen, setIsYouTubeModalOpen] = useState(false);
+  const [youtubeTitle, setYoutubeTitle] = useState(() => buildDefaultYouTubeTitle(clip.title));
+  const [youtubeDescription, setYoutubeDescription] = useState(() =>
+    buildDefaultYouTubeDescription(clip.title, clip.caption)
+  );
+  const [clipYoutubePrivacy, setClipYoutubePrivacy] =
+    useState<YouTubePrivacyStatus>(youtubePrivacy);
+
+  useEffect(() => {
+    setClipYoutubePrivacy(youtubePrivacy);
+  }, [youtubePrivacy]);
+
   const virality = getViralityLabel(clip.score);
   const downloadUrl = buildClipDownloadUrl(clip);
   const downloadFilename = getClipFilename(clip);
@@ -109,38 +128,60 @@ export function ClipCard({
   };
 
   const handleCopyCaption = async () => {
-    const ok = await copyTextToClipboard(clip.caption);
+    const ok = await copyTextToClipboard(youtubeDescription);
     if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2200);
     }
   };
 
+  const executePublish = async (
+    platform: SocialPlatform,
+    overrides?: { title: string; caption: string; privacyStatus?: YouTubePrivacyStatus }
+  ) => {
+    if (!jobId) return;
+    setPublishError(null);
+    setActiveGuide(null);
+    setPublishingPlatform(platform);
+    try {
+      const result = await publishClipToSocial({
+        platform,
+        jobId,
+        clipIndex: index + 1,
+        title: overrides?.title ?? (platform === 'youtube' ? youtubeTitle : clip.title),
+        caption: overrides?.caption ?? (platform === 'youtube' ? youtubeDescription : clip.caption),
+        privacyStatus:
+          platform === 'youtube' ? (overrides?.privacyStatus ?? clipYoutubePrivacy) : undefined,
+      });
+      setPublishedResults((prev) => ({ ...prev, [platform]: result }));
+    } catch (err) {
+      const message =
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : `Could not publish to ${SOCIAL_GUIDES[platform].label}.`;
+      setPublishError(message);
+    } finally {
+      setPublishingPlatform(null);
+    }
+  };
+
   const handleSocialPost = async (platform: SocialPlatform) => {
     setPublishError(null);
 
-    if (isPlatformConnected(platform) && jobId) {
-      setActiveGuide(null);
-      setPublishingPlatform(platform);
-      try {
-        const result = await publishClipToSocial({
-          platform,
-          jobId,
-          clipIndex: index + 1,
-          title: clip.title,
-          caption: clip.caption,
-          privacyStatus: platform === 'youtube' ? youtubePrivacy : undefined,
-        });
-        setPublishedResults((prev) => ({ ...prev, [platform]: result }));
-      } catch (err) {
-        const message =
-          err instanceof ApiError || err instanceof Error
-            ? err.message
-            : `Could not publish to ${SOCIAL_GUIDES[platform].label}.`;
-        setPublishError(message);
-      } finally {
-        setPublishingPlatform(null);
+    // For YouTube, open the Details editor modal so user can edit 100-char title & 5000-char description with viral hashtags before uploading
+    if (platform === 'youtube') {
+      if (isPlatformConnected('youtube') && jobId) {
+        setActiveGuide(null);
+        setIsYouTubeModalOpen(true);
+        return;
       }
+      setActiveGuide((current) => (current === platform ? null : platform));
+      triggerSynchronousDownload(clip);
+      return;
+    }
+
+    if (isPlatformConnected(platform) && jobId) {
+      await executePublish(platform);
       return;
     }
 
@@ -151,7 +192,7 @@ export function ClipCard({
 
   return (
     <article
-      aria-label={`Clip ${index + 1}: ${clip.title}`}
+      aria-label={`Clip ${index + 1}: ${youtubeTitle}`}
       className="flex flex-col rounded-2xl border border-white/[0.09] bg-[#12121C] transition-colors duration-150 hover:border-white/[0.16]"
     >
       <VerticalVideoPlayer clip={clip} />
@@ -168,15 +209,27 @@ export function ClipCard({
         </div>
 
         <h3 className="mt-2 text-lg font-semibold leading-snug text-white">
-          {clip.title}
+          {youtubeTitle}
         </h3>
 
-        <p className="mt-2.5 line-clamp-3 text-sm leading-relaxed text-zinc-400">
-          {clip.caption}
+        <p className="mt-2.5 line-clamp-3 whitespace-pre-line text-sm leading-relaxed text-zinc-400">
+          {youtubeDescription}
         </p>
 
-        {/* Primary actions: Download MP4 + Copy Caption */}
-        <div className="mt-5 grid grid-cols-2 gap-2.5">
+        <button
+          type="button"
+          onClick={() => {
+            setPublishError(null);
+            setIsYouTubeModalOpen(true);
+          }}
+          className="mt-3 inline-flex items-center gap-1.5 self-start rounded-lg border border-white/[0.1] bg-white/[0.03] px-2.5 py-1.5 text-xs font-medium text-fuchsia-300 hover:border-fuchsia-400/40 hover:bg-fuchsia-500/10 hover:text-fuchsia-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400"
+        >
+          <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+          <span>Edit YouTube Title &amp; Description</span>
+        </button>
+
+        {/* Primary actions: Download MP4 + Copy Description */}
+        <div className="mt-4 grid grid-cols-2 gap-2.5">
           {downloadUrl ? (
             <a
               href={downloadUrl}
@@ -202,7 +255,7 @@ export function ClipCard({
           <button
             type="button"
             onClick={handleCopyCaption}
-            aria-label={`Copy caption for ${clip.title}`}
+            aria-label={`Copy description for ${clip.title}`}
             className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl border border-white/[0.12] bg-white/[0.04] px-3.5 py-2 text-xs font-semibold text-zinc-100 hover:bg-white/[0.09] transition-colors duration-150 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400"
           >
             {copied ? (
@@ -219,7 +272,7 @@ export function ClipCard({
           </button>
         </div>
 
-        {/* Social Post Buttons (direct 1-click publish when connected; download + connect guide otherwise) */}
+        {/* Social Post Buttons (direct publish when connected; download + connect guide otherwise) */}
         <div className="mt-4 border-t border-white/[0.07] pt-4">
           <div className="mb-2.5 flex items-center justify-between gap-2">
             <p className="text-xs font-medium text-zinc-500">Publish to social</p>
@@ -302,7 +355,7 @@ export function ClipCard({
             })}
           </div>
 
-          {publishError && (
+          {publishError && !isYouTubeModalOpen && (
             <div
               role="alert"
               className="mt-3 flex items-start gap-2 rounded-xl border border-rose-500/35 bg-rose-500/10 p-3 text-xs text-rose-200"
@@ -346,6 +399,32 @@ export function ClipCard({
           )}
         </div>
       </div>
+
+      <YouTubePublishModal
+        isOpen={isYouTubeModalOpen}
+        clip={clip}
+        title={youtubeTitle}
+        description={youtubeDescription}
+        privacyStatus={clipYoutubePrivacy}
+        connectedChannelTitle={socialAccounts?.youtube?.channelTitle ?? null}
+        canDirectPublish={Boolean(isPlatformConnected('youtube') && jobId)}
+        isPublishing={publishingPlatform === 'youtube'}
+        publishError={publishError}
+        publishedResult={publishedResults.youtube ?? null}
+        onTitleChange={setYoutubeTitle}
+        onDescriptionChange={setYoutubeDescription}
+        onPrivacyChange={setClipYoutubePrivacy}
+        onClose={() => setIsYouTubeModalOpen(false)}
+        onPublish={() =>
+          void executePublish('youtube', {
+            title: youtubeTitle,
+            caption: youtubeDescription,
+            privacyStatus: clipYoutubePrivacy,
+          })
+        }
+        onOpenAccounts={onOpenAccounts}
+      />
     </article>
   );
 }
+

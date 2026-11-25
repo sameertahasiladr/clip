@@ -7,6 +7,13 @@ import {
   validateYouTubeUrl,
 } from './youtube';
 import { buildMockClips } from '../api';
+import {
+  YOUTUBE_DESCRIPTION_MAX_CHARS,
+  YOUTUBE_TITLE_MAX_CHARS,
+  appendHashtagSafely,
+  buildDefaultYouTubeDescription,
+  buildDefaultYouTubeTitle,
+} from './youtubeMetadata';
 
 test('validateYouTubeUrl accepts watch, youtu.be, and shorts formats', () => {
   const watch = validateYouTubeUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s');
@@ -65,3 +72,34 @@ test('buildMockClips respects clipCount, clipLength tolerance, and captions togg
     assert.ok(clip.duration >= 13 && clip.duration <= 17);
   }
 });
+
+test('buildDefaultYouTubeTitle includes #Shorts and #Viral within 100 chars even for long titles', () => {
+  const shortTitle = buildDefaultYouTubeTitle('Why 90% of Viral Hooks Win in Two Seconds');
+  assert.ok(shortTitle.includes('#Shorts'));
+  assert.ok(shortTitle.includes('#Viral'));
+  assert.ok(shortTitle.length <= YOUTUBE_TITLE_MAX_CHARS);
+
+  const veryLongTitle = buildDefaultYouTubeTitle(
+    'This is an extraordinarily long YouTube video clip title that definitely exceeds one hundred characters by itself and must be trimmed cleanly'
+  );
+  assert.ok(veryLongTitle.includes('#Shorts'));
+  assert.ok(veryLongTitle.includes('#Viral'));
+  assert.ok(veryLongTitle.length <= YOUTUBE_TITLE_MAX_CHARS);
+});
+
+test('buildDefaultYouTubeDescription includes viral hashtags and respects 5000 char limit', () => {
+  const desc = buildDefaultYouTubeDescription(
+    'Creator Growth Strategy',
+    'Start inside the tension and double your retention overnight. #creatorstrategy'
+  );
+  assert.ok(desc.includes('#Shorts'));
+  assert.ok(desc.includes('#Viral'));
+  assert.ok(desc.includes('#Trending'));
+  assert.ok(desc.includes('#YouTubeShorts'));
+  assert.ok(desc.length <= YOUTUBE_DESCRIPTION_MAX_CHARS);
+
+  // Appending an already-present hashtag does not duplicate it
+  const same = appendHashtagSafely(desc, '#Viral', YOUTUBE_DESCRIPTION_MAX_CHARS, '\n');
+  assert.equal(same, desc);
+});
+
