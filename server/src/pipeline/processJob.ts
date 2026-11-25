@@ -8,7 +8,7 @@ import { logger } from '../logger.js';
 import type { JobStore } from '../queue/jobStore.js';
 import { uploadClipToCloudinary } from '../services/cloudinary.js';
 import { renderVerticalClip } from '../services/ffmpeg.js';
-import { selectBestMoments } from '../services/momentSelector.js';
+import { ensureEnglishTranscript, selectBestMoments } from '../services/momentSelector.js';
 import { transcribeWithWhisper } from '../services/whisper.js';
 import {
   downloadYouTubeStreamsToFile,
@@ -253,8 +253,14 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
     }
 
     if (transcript.length === 0 && config.openaiApiKey) {
-      logger.info('Extracting audio and transcribing downloaded video with Whisper', { jobId });
+      logger.info('Extracting audio and translating downloaded video to English with Whisper', {
+        jobId,
+      });
       transcript = await transcribeWithWhisper(downloadedVideoPath, jobDir);
+    }
+
+    if (transcript.length > 0) {
+      transcript = await ensureEnglishTranscript(transcript);
     }
 
     await store.updateProgress(jobId, {
@@ -305,7 +311,7 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
         moment,
         transcript,
         captions: job.captions,
-        resolution: useCloudinary ? '1080x1920' : '720x1280',
+        resolution: '1080x1920',
       });
 
       if (useCloudinary) {

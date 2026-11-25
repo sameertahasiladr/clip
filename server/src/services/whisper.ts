@@ -50,9 +50,9 @@ export async function transcribeWithWhisper(
   formData.append('file', new Blob([audioBuffer], { type: 'audio/mpeg' }), 'audio.mp3');
   formData.append('model', 'whisper-1');
   formData.append('response_format', 'verbose_json');
-  formData.append('timestamp_granularities[]', 'segment');
 
-  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+  // Use /v1/audio/translations so speech in any language always returns timestamped English captions
+  const response = await fetch('https://api.openai.com/v1/audio/translations', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.openaiApiKey}`,
@@ -62,7 +62,9 @@ export async function transcribeWithWhisper(
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => '');
-    throw new Error(`Whisper transcription failed (HTTP ${response.status}): ${errorText.slice(0, 200)}`);
+    throw new Error(
+      `Whisper English translation failed (HTTP ${response.status}): ${errorText.slice(0, 200)}`
+    );
   }
 
   const data = (await response.json()) as {

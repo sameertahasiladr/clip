@@ -366,6 +366,26 @@ function extractBestStreams(streamingData?: InnertubePlayerData['streamingData']
   return { videoUrl: null, audioUrl: null };
 }
 
+/**
+ * Ensures a YouTube timedtext caption URL always returns English subtitles by appending
+ * YouTube's official `tlang=en` translation parameter for non-English caption tracks.
+ */
+export function ensureEnglishCaptionUrl(baseUrl: string, languageCode?: string): string | null {
+  try {
+    const parsedUrl = new URL(baseUrl);
+    if (parsedUrl.protocol !== 'https:' || !parsedUrl.hostname.endsWith('youtube.com')) {
+      return null;
+    }
+    const lang = (languageCode ?? parsedUrl.searchParams.get('lang') ?? '').toLowerCase();
+    if (!lang.startsWith('en') && parsedUrl.searchParams.get('tlang')?.toLowerCase() !== 'en') {
+      parsedUrl.searchParams.set('tlang', 'en');
+    }
+    return parsedUrl.toString();
+  } catch {
+    return null;
+  }
+}
+
 async function fetchBestCaptionTrack(
   tracks: CaptionTrack[],
   cookieHeader?: string
@@ -383,12 +403,10 @@ async function fetchBestCaptionTrack(
 
   for (const track of sorted.slice(0, 3)) {
     if (!track.baseUrl) continue;
+    const englishUrl = ensureEnglishCaptionUrl(track.baseUrl, track.languageCode);
+    if (!englishUrl) continue;
     try {
-      const parsedUrl = new URL(track.baseUrl);
-      if (parsedUrl.protocol !== 'https:' || !parsedUrl.hostname.endsWith('youtube.com')) {
-        continue;
-      }
-      const res = await fetch(parsedUrl.toString(), {
+      const res = await fetch(englishUrl, {
         headers: {
           'User-Agent': ANDROID_INNERTUBE_UA,
           ...(cookieHeader ? { Cookie: cookieHeader } : {}),
