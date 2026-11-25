@@ -11,6 +11,7 @@ import { createJobRateLimiter } from './middleware/rateLimit.js';
 import { EXPORTS_BASE_DIR, UPLOADS_BASE_DIR } from './pipeline/processJob.js';
 import type { ClipJobQueue } from './queue/jobQueue.js';
 import type { JobStore } from './queue/jobStore.js';
+import { createSocialRouter } from './routes/social.js';
 import type { ClipLength } from './types.js';
 import { isValidJobId, sanitizeDownloadSlug, validateCreateJobRequest } from './validation.js';
 
@@ -23,6 +24,8 @@ export function createApiRouter(deps: { store: JobStore; queue: ClipJobQueue }):
   router.get('/health', (_req, res) => {
     res.json({ ok: true, queueMode: queue.mode });
   });
+
+  router.use('/social', createSocialRouter({ jobStore: store }));
 
   router.post('/jobs', createJobRateLimiter, async (req, res, next) => {
     try {
@@ -225,8 +228,8 @@ export function createApp(deps: { store: JobStore; queue: ClipJobQueue }): Expre
         }
         callback(new AppError('Origin not allowed by CORS policy.', 403, 'CORS_FORBIDDEN'));
       },
-      methods: ['GET', 'POST', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Accept'],
+      methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Accept', 'Authorization'],
     })
   );
 

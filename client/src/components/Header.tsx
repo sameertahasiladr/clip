@@ -1,15 +1,23 @@
-import { Scissors } from 'lucide-react';
+import { Link2, Scissors } from 'lucide-react';
 
 interface HeaderProps {
   hasActiveSession: boolean;
+  connectedCount: number;
   onReset: () => void;
   onFillDemoUrl: () => void;
+  onOpenAccounts: () => void;
 }
 
-export function Header({ hasActiveSession, onReset, onFillDemoUrl }: HeaderProps) {
+export function Header({
+  hasActiveSession,
+  connectedCount,
+  onReset,
+  onFillDemoUrl,
+  onOpenAccounts,
+}: HeaderProps) {
   return (
     <header className="sticky top-0 z-30 border-b border-white/[0.07] bg-[#09090F]/90 backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-8 px-4 sm:px-6 lg:px-8">
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
         {/* Zone 1: Single-line Brand wordmark */}
         <button
           type="button"
@@ -47,13 +55,26 @@ export function Header({ hasActiveSession, onReset, onFillDemoUrl }: HeaderProps
           </a>
         </nav>
 
-        {/* Zone 3: 1 primary action */}
-        <div className="flex items-center shrink-0">
+        {/* Zone 3: Social accounts & primary action */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={onOpenAccounts}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-semibold transition-colors duration-150 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400 ${
+              connectedCount > 0
+                ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20'
+                : 'border-fuchsia-500/35 bg-fuchsia-500/10 text-fuchsia-200 hover:bg-fuchsia-500/20'
+            }`}
+          >
+            <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>{connectedCount > 0 ? `Accounts (${connectedCount}/3)` : 'Connect Accounts'}</span>
+          </button>
+
           {hasActiveSession ? (
             <button
               type="button"
               onClick={onReset}
-              className="rounded-lg border border-white/15 bg-white/[0.04] px-4 py-2 text-xs font-semibold text-zinc-100 hover:bg-white/[0.09] transition-colors duration-150 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400"
+              className="rounded-lg border border-white/15 bg-white/[0.04] px-3.5 py-2 text-xs font-semibold text-zinc-100 hover:bg-white/[0.09] transition-colors duration-150 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400"
             >
               New Video
             </button>
@@ -61,7 +82,7 @@ export function Header({ hasActiveSession, onReset, onFillDemoUrl }: HeaderProps
             <button
               type="button"
               onClick={onFillDemoUrl}
-              className="rounded-lg border border-white/15 bg-white/[0.04] px-4 py-2 text-xs font-semibold text-zinc-100 hover:bg-white/[0.09] transition-colors duration-150 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400"
+              className="hidden sm:inline-flex rounded-lg border border-white/15 bg-white/[0.04] px-3.5 py-2 text-xs font-semibold text-zinc-100 hover:bg-white/[0.09] transition-colors duration-150 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400"
             >
               Try Sample Link
             </button>

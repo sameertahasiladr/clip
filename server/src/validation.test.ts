@@ -25,6 +25,12 @@ import {
   selectBestMomentsLocally,
   topUpMomentsToCount,
 } from './services/momentSelector.js';
+import { SocialAccountStore } from './services/socialStore.js';
+import {
+  buildMetaOAuthUrl,
+  buildOAuthCallbackHtml,
+  buildYouTubeOAuthUrl,
+} from './services/socialOAuth.js';
 
 test('parseTimedTextXml extracts format-3 and legacy YouTube captions cleanly', () => {
   const xml = `<?xml version="1.0" encoding="utf-8" ?><timedtext format="3"><body><p t="18640" d="3240">We&#39;re no strangers to love</p><p t="22640" d="4320">You know the rules &amp; so do I</p></body></timedtext>`;
@@ -424,6 +430,135 @@ test('buildVerticalFilterComplex supports both full vertical crop and horizontal
   assert.ok(blurFilter.includes('force_original_aspect_ratio=decrease[fg]'));
   assert.ok(blurFilter.includes('[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,ass=clip-1.ass[vout]'));
 });
+
+test('SocialAccountStore enforces single-use OAuth state, hides tokens in summary, and switches Meta pages', () => {
+  const store = new SocialAccountStore();
+  const sessionId = store.createSession();
+  assert.equal(store.isValidSessionToken(sessionId), true);
+  assert.equal(store.isValidSessionToken('invalid-short-token'), false);
+
+  // Single-use CSRF state + provider match
+  const state = store.createOAuthState(
+    'youtube',
+    sessionId,
+    'https://example.com/api/social/oauth/youtube/callback'
+  );
+  // Wrong provider consumes and rejects the state
+  assert.equal(store.consumeOAuthState(state, 'meta'), null);
+  // Replay attempt fails
+  assert.equal(store.consumeOAuthState(state, 'youtube'), null);
+
+  const validState = store.createOAuthState(
+    'meta',
+    sessionId,
+    'https://example.com/api/social/oauth/meta/callback'
+  );
+  const consumed = store.consumeOAuthState(validState, 'meta');
+  assert.ok(consumed);
+  assert.equal(consumed.sessionId, sessionId);
+  assert.equal(store.consumeOAuthState(validState, 'meta'), null);
+
+  // Store YouTube + Meta tokens and verify public summary never exposes tokens
+  store.setYouTubeConnection(sessionId, {
+    channelId: 'UC_test_channel',
+    channelTitle: 'ClipGenie Studio',
+    accessToken: 'secret-yt-access-token',
+    refreshToken: 'secret-yt-refresh-token',
+    expiresAt: Date.now() + 3600_000,
+    connectedAt: new Date().toISOString(),
+  });
+
+  store.setMetaConnection(sessionId, {
+    userAccessToken: 'secret-meta-user-token',
+    expiresAt: Date.now() + 3600_000,
+    pages: [
+      {
+        pageId: 'page_1',
+        pageName: 'Main Creator Page',
+        pageAccessToken: 'secret-page-token-1',
+        instagramAccount: { id: 'ig_1', username: 'creator_main' },
+      },
+      {
+        pageId: 'page_2',
+        pageName: 'Second Brand Page',
+        pageAccessToken: 'secret-page-token-2',
+      },
+    ],
+    selectedPageId: 'page_1',
+    facebookEnabled: true,
+    instagramEnabled: true,
+    connectedAt: new Date().toISOString(),
+  });
+
+  const summary = store.toPublicSummary(sessionId);
+  const serialized = JSON.stringify(summary);
+  assert.ok(!serialized.includes('secret-yt-access-token'));
+  assert.ok(!serialized.includes('secret-yt-refresh-token'));
+  assert.ok(!serialized.includes('secret-meta-user-token'));
+  assert.ok(!serialized.includes('secret-page-token-1'));
+  assert.equal(summary.youtube?.channelTitle, 'ClipGenie Studio');
+  assert.equal(summary.facebook?.pageName, 'Main Creator Page');
+  assert.equal(summary.instagram?.username, 'creator_main');
+
+  // Switch active Meta page to page_2 (no linked Instagram account)
+  assert.equal(store.selectMetaPage(sessionId, 'page_2'), true);
+  assert.equal(store.selectMetaPage(sessionId, 'nonexistent'), false);
+  const switched = store.toPublicSummary(sessionId);
+  assert.equal(switched.facebook?.pageName, 'Second Brand Page');
+  assert.equal(switched.instagram, null);
+
+  // Disconnect platforms cleanly
+  store.disconnectPlatform(sessionId, 'youtube');
+  store.disconnectPlatform(sessionId, 'facebook');
+  const disconnected = store.toPublicSummary(sessionId);
+  assert.equal(disconnected.youtube, null);
+  assert.equal(disconnected.facebook, null);
+  assert.equal(disconnected.metaPages.length, 0);
+});
+
+test('buildYouTubeOAuthUrl and buildMetaOAuthUrl build direct provider authorization URLs', () => {
+  const prevGoogleId = process.env.GOOGLE_CLIENT_ID;
+  const prevMetaId = process.env.META_APP_ID;
+  process.env.GOOGLE_CLIENT_ID = 'test-google-client-id';
+  process.env.META_APP_ID = 'test-meta-app-id';
+
+  try {
+    const ytUrl = new URL(
+      buildYouTubeOAuthUrl('state123', 'https://app.example.com/api/social/oauth/youtube/callback')
+    );
+    assert.equal(ytUrl.origin, 'https://accounts.google.com');
+    assert.equal(ytUrl.searchParams.get('client_id'), 'test-google-client-id');
+    assert.equal(ytUrl.searchParams.get('state'), 'state123');
+    assert.ok(ytUrl.searchParams.get('scope')?.includes('youtube.upload'));
+
+    const metaUrl = new URL(
+      buildMetaOAuthUrl('state456', 'https://app.example.com/api/social/oauth/meta/callback')
+    );
+    assert.equal(metaUrl.origin, 'https://www.facebook.com');
+    assert.equal(metaUrl.searchParams.get('client_id'), 'test-meta-app-id');
+    assert.equal(metaUrl.searchParams.get('state'), 'state456');
+    assert.ok(metaUrl.searchParams.get('scope')?.includes('pages_manage_posts'));
+    assert.ok(metaUrl.searchParams.get('scope')?.includes('instagram_content_publish'));
+  } finally {
+    if (prevGoogleId === undefined) delete process.env.GOOGLE_CLIENT_ID;
+    else process.env.GOOGLE_CLIENT_ID = prevGoogleId;
+    if (prevMetaId === undefined) delete process.env.META_APP_ID;
+    else process.env.META_APP_ID = prevMetaId;
+  }
+});
+
+test('buildOAuthCallbackHtml escapes script breakout payloads safely', () => {
+  const html = buildOAuthCallbackHtml({
+    ok: false,
+    provider: 'meta',
+    errorMessage: '</script><script>alert(1)</script>',
+  });
+
+  assert.ok(!html.includes('</script><script>alert(1)'));
+  assert.ok(html.includes('&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;'));
+  assert.ok(html.includes('\\u003c/script\\u003e\\u003cscript\\u003ealert(1)\\u003c/script\\u003e'));
+});
+
 
 
 

@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ApiError, createJob, getJobStatus } from './api';
+import {
+  ApiError,
+  createJob,
+  disconnectSocialAccount,
+  fetchSocialAccounts,
+  getJobStatus,
+  getSocialOAuthUrl,
+  selectMetaPage,
+} from './api';
 import { EmptyPreview } from './components/EmptyPreview';
 import { ErrorState } from './components/ErrorState';
 import { Footer } from './components/Footer';
@@ -7,13 +15,35 @@ import { Header } from './components/Header';
 import { HeroForm } from './components/HeroForm';
 import { ProcessingStepper } from './components/ProcessingStepper';
 import { ResultsGrid } from './components/ResultsGrid';
-import type { ClipItem, ClipLength, JobStep, VideoLayout } from './types';
+import { SocialAccountsModal } from './components/SocialAccountsModal';
+import type {
+  ClipItem,
+  ClipLength,
+  JobStep,
+  OAuthProvider,
+  SocialAccountsState,
+  SocialPlatform,
+  VideoLayout,
+  YouTubePrivacyStatus,
+} from './types';
 import { validateYouTubeUrl } from './utils/youtube';
 
 const POLL_INTERVAL_MS = 3000;
 const SAMPLE_YOUTUBE_URL = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
 
 type ViewState = 'idle' | 'processing' | 'results' | 'error';
+
+function isTrustedOAuthMessageOrigin(origin: string, expectedCallbackOrigin?: string | null): boolean {
+  if (!origin) return false;
+  if (origin === window.location.origin) return true;
+  if (expectedCallbackOrigin && origin === expectedCallbackOrigin) return true;
+  try {
+    const parsed = new URL(origin);
+    return parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
 
 export default function App() {
   const [url, setUrl] = useState('');
@@ -32,7 +62,129 @@ export default function App() {
   const [clips, setClips] = useState<ClipItem[]>([]);
   const [jobError, setJobError] = useState<string | null>(null);
 
+  // Connected Social Accounts state (tokens stay strictly server-side)
+  const [socialAccounts, setSocialAccounts] = useState<SocialAccountsState | null>(null);
+  const [isAccountsModalOpen, setIsAccountsModalOpen] = useState(false);
+  const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
+  const [connectingProvider, setConnectingProvider] = useState<OAuthProvider | null>(null);
+  const [oauthError, setOauthError] = useState<string | null>(null);
+  const [youtubePrivacy, setYoutubePrivacy] = useState<YouTubePrivacyStatus>('public');
+
   const pollTimerRef = useRef<number | null>(null);
+
+  const loadSocialAccounts = useCallback(async () => {
+    setIsLoadingAccounts(true);
+    try {
+      const state = await fetchSocialAccounts();
+      setSocialAccounts(state);
+    } catch {
+      // Non-fatal in standalone mock mode
+    } finally {
+      setIsLoadingAccounts(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSocialAccounts();
+  }, [loadSocialAccounts]);
+
+  // Listen for OAuth popup completion postMessage from /api/social/oauth/:provider/callback
+  useEffect(() => {
+    let expectedCallbackOrigin: string | null = null;
+    try {
+      const sampleUri = socialAccounts?.redirectUris.youtube || socialAccounts?.redirectUris.meta;
+      if (sampleUri) expectedCallbackOrigin = new URL(sampleUri).origin;
+    } catch {
+      expectedCallbackOrigin = null;
+    }
+
+    const handleMessage = (event: MessageEvent) => {
+      if (!isTrustedOAuthMessageOrigin(event.origin, expectedCallbackOrigin)) return;
+      const data = event.data as { type?: string; error?: string } | null;
+      if (!data || typeof data !== 'object') return;
+
+      if (data.type === 'CLIPGENIE_OAUTH_SUCCESS') {
+        setConnectingProvider(null);
+        setOauthError(null);
+        void loadSocialAccounts();
+      } else if (data.type === 'CLIPGENIE_OAUTH_ERROR') {
+        setConnectingProvider(null);
+        setOauthError(data.error || 'OAuth authorization was cancelled or failed.');
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [loadSocialAccounts, socialAccounts?.redirectUris.meta, socialAccounts?.redirectUris.youtube]);
+
+  const handleConnectProvider = async (provider: OAuthProvider) => {
+    setOauthError(null);
+    setConnectingProvider(provider);
+    try {
+      const { url: providerAuthUrl } = await getSocialOAuthUrl(provider);
+      const popup = window.open(
+        providerAuthUrl,
+        `clipgenie_oauth_${provider}`,
+        'width=600,height=720,noopener=no'
+      );
+      if (!popup) {
+        setConnectingProvider(null);
+        setOauthError(
+          'Your browser blocked the sign-in popup. Allow popups for this site and click Connect again.'
+        );
+        return;
+      }
+
+      // Reset spinner cleanly if the user closes the popup manually
+      const watchClosed = window.setInterval(() => {
+        if (popup.closed) {
+          window.clearInterval(watchClosed);
+          setConnectingProvider((current) => (current === provider ? null : current));
+          void loadSocialAccounts();
+        }
+      }, 600);
+    } catch (err) {
+      setConnectingProvider(null);
+      setOauthError(
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : 'Unable to start account connection.'
+      );
+    }
+  };
+
+  const handleDisconnectPlatform = async (platform: SocialPlatform) => {
+    setOauthError(null);
+    try {
+      await disconnectSocialAccount(platform);
+      await loadSocialAccounts();
+    } catch (err) {
+      setOauthError(
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : 'Could not disconnect account.'
+      );
+    }
+  };
+
+  const handleSelectMetaPage = async (pageId: string) => {
+    setOauthError(null);
+    try {
+      const updated = await selectMetaPage(pageId);
+      setSocialAccounts(updated);
+    } catch (err) {
+      setOauthError(
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : 'Could not switch active Facebook Page.'
+      );
+    }
+  };
+
+  const connectedCount =
+    (socialAccounts?.youtube ? 1 : 0) +
+    (socialAccounts?.facebook ? 1 : 0) +
+    (socialAccounts?.instagram ? 1 : 0);
 
   const stopPolling = useCallback(() => {
     if (pollTimerRef.current !== null) {
@@ -157,8 +309,14 @@ export default function App() {
     <div className="flex min-h-screen flex-col bg-[#09090F] text-zinc-100">
       <Header
         hasActiveSession={viewState !== 'idle'}
+        connectedCount={connectedCount}
         onReset={handleReset}
         onFillDemoUrl={handleFillDemoUrl}
+        onOpenAccounts={() => {
+          setOauthError(null);
+          setIsAccountsModalOpen(true);
+          void loadSocialAccounts();
+        }}
       />
 
       <main className="flex-1 px-4 sm:px-6 lg:px-8">
@@ -193,7 +351,19 @@ export default function App() {
         )}
 
         {viewState === 'results' && (
-          <ResultsGrid clips={clips} sourceUrl={submittedUrl} onReset={handleReset} />
+          <ResultsGrid
+            clips={clips}
+            jobId={activeJobId}
+            sourceUrl={submittedUrl}
+            socialAccounts={socialAccounts}
+            youtubePrivacy={youtubePrivacy}
+            onReset={handleReset}
+            onOpenAccounts={() => {
+              setOauthError(null);
+              setIsAccountsModalOpen(true);
+              void loadSocialAccounts();
+            }}
+          />
         )}
 
         {viewState === 'error' && (
@@ -209,6 +379,20 @@ export default function App() {
       </main>
 
       <Footer />
+
+      <SocialAccountsModal
+        isOpen={isAccountsModalOpen}
+        accounts={socialAccounts}
+        isLoading={isLoadingAccounts}
+        connectingProvider={connectingProvider}
+        oauthError={oauthError}
+        youtubePrivacy={youtubePrivacy}
+        onClose={() => setIsAccountsModalOpen(false)}
+        onConnect={(provider) => void handleConnectProvider(provider)}
+        onDisconnect={(platform) => void handleDisconnectPlatform(platform)}
+        onSelectMetaPage={(pageId) => void handleSelectMetaPage(pageId)}
+        onYouTubePrivacyChange={setYoutubePrivacy}
+      />
     </div>
   );
 }

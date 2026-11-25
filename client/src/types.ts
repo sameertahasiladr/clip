@@ -62,3 +62,67 @@ export interface JobResponse {
 }
 
 export type SocialPlatform = 'youtube' | 'instagram' | 'facebook';
+export type OAuthProvider = 'youtube' | 'meta';
+export type YouTubePrivacyStatus = 'public' | 'unlisted' | 'private';
+
+export interface SocialMetaPageOption {
+  pageId: string;
+  pageName: string;
+  pictureUrl?: string;
+  hasInstagram: boolean;
+  instagramUsername?: string;
+}
+
+export interface SocialAccountsState {
+  configured: {
+    youtube: boolean;
+    meta: boolean;
+  };
+  redirectUris: {
+    youtube: string;
+    meta: string;
+  };
+  youtube: {
+    connected: true;
+    channelId: string;
+    channelTitle: string;
+    thumbnailUrl?: string;
+    connectedAt: string;
+  } | null;
+  facebook: {
+    connected: true;
+    pageId: string;
+    pageName: string;
+    pictureUrl?: string;
+    connectedAt: string;
+  } | null;
+  instagram: {
+    connected: true;
+    accountId: string;
+    username: string;
+    name?: string;
+    profilePictureUrl?: string;
+    linkedPageName: string;
+    connectedAt: string;
+  } | null;
+  metaPages: SocialMetaPageOption[];
+  selectedMetaPageId: string | null;
+}
+
+export interface PublishClipPayload {
+  platform: SocialPlatform;
+  jobId: string;
+  clipIndex: number;
+  title: string;
+  caption: string;
+  privacyStatus?: YouTubePrivacyStatus;
+}
+
+export interface PublishClipResponse {
+  ok: true;
+  platform: SocialPlatform;
+  externalId: string;
+  publishedUrl: string;
+  accountLabel: string;
+}
+

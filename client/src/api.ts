@@ -4,6 +4,11 @@ import type {
   CreateJobResponse,
   JobResponse,
   JobStep,
+  OAuthProvider,
+  PublishClipPayload,
+  PublishClipResponse,
+  SocialAccountsState,
+  SocialPlatform,
   VideoLayout,
 } from './types';
 import { validateYouTubeUrl } from './utils/youtube';
@@ -349,3 +354,166 @@ export async function getJobStatus(jobId: string): Promise<JobResponse> {
     error: data.error,
   };
 }
+
+// In-memory opaque social session token (never persisted to localStorage or sessionStorage)
+let socialSessionToken: string | null = null;
+
+async function ensureSocialSessionToken(): Promise<string> {
+  if (socialSessionToken) return socialSessionToken;
+
+  const response = await fetch(`${API_BASE_URL}/api/social/session`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  });
+
+  const data = (await response.json().catch(() => ({}))) as {
+    sessionToken?: string;
+    error?: string;
+  };
+
+  if (!response.ok || !data.sessionToken) {
+    throw new ApiError(
+      data.error ?? `Unable to initialize social session (HTTP ${response.status}).`,
+      response.status
+    );
+  }
+
+  socialSessionToken = data.sessionToken;
+  return socialSessionToken;
+}
+
+export async function fetchSocialAccounts(): Promise<SocialAccountsState> {
+  const token = await ensureSocialSessionToken();
+  const response = await fetch(`${API_BASE_URL}/api/social/accounts`, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  const data = (await response.json().catch(() => ({}))) as SocialAccountsState & {
+    error?: string;
+  };
+
+  if (!response.ok) {
+    throw new ApiError(
+      data.error ?? `Unable to load connected accounts (HTTP ${response.status}).`,
+      response.status
+    );
+  }
+
+  return data;
+}
+
+export async function getSocialOAuthUrl(
+  provider: OAuthProvider
+): Promise<{ url: string; redirectUri: string }> {
+  const token = await ensureSocialSessionToken();
+  const response = await fetch(`${API_BASE_URL}/api/social/oauth/${provider}/url`, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  const data = (await response.json().catch(() => ({}))) as {
+    url?: string;
+    redirectUri?: string;
+    error?: string;
+    code?: string;
+  };
+
+  if (!response.ok || !data.url) {
+    throw new ApiError(
+      data.error ?? `Unable to start ${provider} OAuth connection (HTTP ${response.status}).`,
+      response.status,
+      data.code
+    );
+  }
+
+  return { url: data.url, redirectUri: data.redirectUri ?? '' };
+}
+
+export async function selectMetaPage(pageId: string): Promise<SocialAccountsState> {
+  const token = await ensureSocialSessionToken();
+  const response = await fetch(`${API_BASE_URL}/api/social/meta/select-page`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ pageId }),
+  });
+
+  const data = (await response.json().catch(() => ({}))) as SocialAccountsState & {
+    error?: string;
+  };
+
+  if (!response.ok) {
+    throw new ApiError(
+      data.error ?? `Could not switch Facebook Page (HTTP ${response.status}).`,
+      response.status
+    );
+  }
+
+  return data;
+}
+
+export async function disconnectSocialAccount(platform: SocialPlatform): Promise<void> {
+  const token = await ensureSocialSessionToken();
+  const response = await fetch(`${API_BASE_URL}/api/social/accounts/${platform}`, {
+    method: 'DELETE',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new ApiError(
+      data.error ?? `Could not disconnect ${platform} (HTTP ${response.status}).`,
+      response.status
+    );
+  }
+}
+
+export async function publishClipToSocial(
+  payload: PublishClipPayload
+): Promise<PublishClipResponse> {
+  const token = await ensureSocialSessionToken();
+  const response = await fetch(`${API_BASE_URL}/api/social/publish`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = (await response.json().catch(() => ({}))) as Partial<PublishClipResponse> & {
+    error?: string;
+    code?: string;
+  };
+
+  if (!response.ok || !data.publishedUrl || !data.externalId) {
+    throw new ApiError(
+      data.error ?? `Could not publish clip to ${payload.platform} (HTTP ${response.status}).`,
+      response.status,
+      data.code
+    );
+  }
+
+  return {
+    ok: true,
+    platform: payload.platform,
+    externalId: data.externalId,
+    publishedUrl: data.publishedUrl,
+    accountLabel: data.accountLabel ?? payload.platform,
+  };
+}
+
