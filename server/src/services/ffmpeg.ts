@@ -175,20 +175,23 @@ export function buildVerticalFilterComplex(params: {
   subtitleFilter: string;
 }): string {
   const { width, height, videoLayout, subtitleFilter } = params;
+  const lanczosFlags = 'lanczos+accurate_rnd+full_chroma_int';
+  const sharpen = 'unsharp=5:5:0.45:3:3:0.0';
+
   if (videoLayout === 'vertical-blur') {
     return [
       `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${width}:${height},boxblur=20:3[bg]`,
-      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=lanczos[fg]`,
+      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=${lanczosFlags},${sharpen}[fg]`,
       `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1${subtitleFilter}[vout]`,
     ].join(';');
   }
 
-  return `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${width}:${height},setsar=1${subtitleFilter}[vout]`;
+  return `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase:flags=${lanczosFlags},crop=${width}:${height},${sharpen},setsar=1${subtitleFilter}[vout]`;
 }
 
 /**
  * Highest-quality H.264 + AAC Shorts/Reels encoding arguments:
- * visually lossless CRF 17, High@4.2 profile, BT.709 true color metadata, and 192 kbps 48 kHz audio.
+ * visually lossless CRF 16, High@4.2 profile, BT.709 true color metadata, and 192 kbps 48 kHz audio.
  */
 export function buildHighQualityEncodeArgs(): string[] {
   return [
@@ -201,7 +204,7 @@ export function buildHighQualityEncodeArgs(): string[] {
     '-preset',
     'medium',
     '-crf',
-    '17',
+    '16',
     '-pix_fmt',
     'yuv420p',
     '-color_primaries',

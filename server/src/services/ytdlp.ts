@@ -309,8 +309,7 @@ export async function tryFetchYouTubeCaptions(
 
   try {
     const baseArgs = await buildYtDlpBaseArgs(jobDir);
-    await execFileAsync(
-      'yt-dlp',
+    await execYtDlp(
       [
         ...baseArgs,
         '--skip-download',

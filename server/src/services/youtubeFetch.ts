@@ -267,6 +267,126 @@ export function parseHlsMaxHeight(m3u8Text: string): number {
 }
 
 /**
+ * Parses a YouTube HLS master playlist (#EXTM3U) and selects the exact highest-resolution,
+ * highest-bandwidth video variant .m3u8 URL plus its matching highest-quality audio rendition .m3u8.
+ * Passing exact variant URLs to FFmpeg guarantees 1080p/1440p/4K instead of risking 144p/360p selection.
+ */
+export function parseBestHlsVariantUrls(
+  m3u8Text: string,
+  masterUrl: string
+): { videoUrl: string; audioUrl: string | null; height: number } | null {
+  if (!m3u8Text.includes('#EXTM3U')) return null;
+
+  const lines = m3u8Text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  // Map AUDIO GROUP-ID -> best trusted audio playlist URL (prefer DEFAULT=YES / AUTOSELECT=YES)
+  const audioByGroup = new Map<string, { url: string; priority: number }>();
+  for (const line of lines) {
+    if (!line.startsWith('#EXT-X-MEDIA:')) continue;
+    if (!/TYPE=AUDIO/i.test(line)) continue;
+    const groupMatch = line.match(/GROUP-ID="([^"]+)"/i);
+    const uriMatch = line.match(/URI="([^"]+)"/i);
+    if (!groupMatch || !uriMatch) continue;
+
+    let resolvedAudioUrl: string;
+    try {
+      resolvedAudioUrl = new URL(uriMatch[1], masterUrl).toString();
+    } catch {
+      continue;
+    }
+    if (!isTrustedGoogleVideoStreamUrl(resolvedAudioUrl)) continue;
+
+    const isDefault = /DEFAULT=YES/i.test(line) ? 2 : 0;
+    const isAuto = /AUTOSELECT=YES/i.test(line) ? 1 : 0;
+    const priority = isDefault + isAuto;
+    const existing = audioByGroup.get(groupMatch[1]);
+    if (!existing || priority > existing.priority) {
+      audioByGroup.set(groupMatch[1], { url: resolvedAudioUrl, priority });
+    }
+  }
+
+  const variants: Array<{
+    videoUrl: string;
+    audioGroupId: string | null;
+    height: number;
+    bandwidth: number;
+  }> = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.startsWith('#EXT-X-STREAM-INF:')) continue;
+
+    // Find next non-comment URI line
+    let uriLine = '';
+    for (let j = i + 1; j < lines.length; j++) {
+      if (!lines[j].startsWith('#')) {
+        uriLine = lines[j];
+        break;
+      }
+    }
+    if (!uriLine) continue;
+
+    let resolvedVideoUrl: string;
+    try {
+      resolvedVideoUrl = new URL(uriLine, masterUrl).toString();
+    } catch {
+      continue;
+    }
+    if (!isTrustedGoogleVideoStreamUrl(resolvedVideoUrl)) continue;
+
+    const resMatch = line.match(/RESOLUTION=\d+x(\d+)/i);
+    const bwMatch = line.match(/BANDWIDTH=(\d+)/i);
+    const audioMatch = line.match(/AUDIO="([^"]+)"/i);
+
+    variants.push({
+      videoUrl: resolvedVideoUrl,
+      audioGroupId: audioMatch ? audioMatch[1] : null,
+      height: resMatch ? Number(resMatch[1]) : 0,
+      bandwidth: bwMatch ? Number(bwMatch[1]) : 0,
+    });
+  }
+
+  if (variants.length > 0) {
+    variants.sort((a, b) => {
+      if (b.height !== a.height) return b.height - a.height;
+      return b.bandwidth - a.bandwidth;
+    });
+    const best = variants[0];
+    let audioUrl: string | null = null;
+    if (best.audioGroupId && audioByGroup.has(best.audioGroupId)) {
+      audioUrl = audioByGroup.get(best.audioGroupId)!.url;
+    } else if (audioByGroup.size > 0) {
+      // Fallback to highest-priority audio group (e.g. "234" 128k AAC over "233" 48k)
+      const groups = Array.from(audioByGroup.entries()).sort((a, b) => {
+        if (b[1].priority !== a[1].priority) return b[1].priority - a[1].priority;
+        return Number(b[0]) - Number(a[0]);
+      });
+      audioUrl = groups[0]?.[1].url ?? null;
+    }
+
+    return {
+      videoUrl: best.videoUrl,
+      audioUrl,
+      height: best.height > 0 ? best.height : 1080,
+    };
+  }
+
+  // Already a single media playlist (#EXTINF)
+  if (m3u8Text.includes('#EXTINF') && isTrustedGoogleVideoStreamUrl(masterUrl)) {
+    return {
+      videoUrl: masterUrl,
+      audioUrl: null,
+      height: parseHlsMaxHeight(m3u8Text),
+    };
+  }
+
+  return null;
+}
+
+/**
  * Extracts the IP address family (4 or 6) embedded in a signed googlevideo.com URL (`ip=` query
  * param or `/ip/<addr>/` path segment) so downloads connect over the exact same IP version
  * that YouTube bound the signature to (prevents dual-stack IPv4/IPv6 HTTP 403s).
@@ -860,7 +980,7 @@ export async function fetchYouTubeVideoInfo(
     url: string,
     userAgent: string,
     cookieHeader?: string
-  ): Promise<number | null> => {
+  ): Promise<{ videoUrl: string; audioUrl: string | null; height: number } | null> => {
     if (!isTrustedGoogleVideoStreamUrl(url)) return null;
     try {
       let text = '';
@@ -905,8 +1025,7 @@ export async function fetchYouTubeVideoInfo(
         text = await readIncomingMessageText(res, 1024 * 1024);
       }
 
-      if (!text.includes('#EXTM3U')) return null;
-      return parseHlsMaxHeight(text);
+      return parseBestHlsVariantUrls(text, url);
     } catch {
       return null;
     }
@@ -915,13 +1034,15 @@ export async function fetchYouTubeVideoInfo(
   const probeCandidatePlayable = async (candidate: StreamCandidate): Promise<boolean> => {
     const cookieHeader = candidate.useCookies ? authCookies?.cookieHeader : undefined;
     if (candidate.isHls) {
-      const hlsHeight = await probeHlsManifestPlayable(
+      const resolvedHls = await probeHlsManifestPlayable(
         candidate.videoUrl,
         candidate.userAgent,
         cookieHeader
       );
-      if (hlsHeight === null) return false;
-      candidate.height = hlsHeight;
+      if (!resolvedHls) return false;
+      candidate.videoUrl = resolvedHls.videoUrl;
+      candidate.audioUrl = resolvedHls.audioUrl;
+      candidate.height = resolvedHls.height;
       return true;
     }
 
@@ -1393,22 +1514,48 @@ export async function downloadYouTubeStreamsToFile(params: {
 
   if (isHls) {
     const proxyUrl = getConfiguredProxy();
-    // Do NOT pass -map 0:v:0 on a multi-variant HLS playlist: FFmpeg's default stream selection
-    // automatically picks the highest-resolution video variant + best audio stream.
-    const ffmpegArgs = [
-      '-y',
-      '-loglevel',
-      'error',
+    const hlsInputOpts = [
       '-user_agent',
       userAgent,
       ...(cookieHeader ? ['-headers', `Cookie: ${cookieHeader}\r\n`] : []),
       ...(proxyUrl && proxyUrl.startsWith('http://') ? ['-http_proxy', proxyUrl] : []),
-      '-i',
-      videoStreamUrl,
-      '-c',
-      'copy',
-      outputPath,
     ];
+
+    const ffmpegArgs = audioStreamUrl
+      ? [
+          '-y',
+          '-loglevel',
+          'error',
+          ...hlsInputOpts,
+          '-i',
+          videoStreamUrl,
+          ...hlsInputOpts,
+          '-i',
+          audioStreamUrl,
+          '-map',
+          '0:v:0',
+          '-map',
+          '1:a:0',
+          '-c',
+          'copy',
+          '-shortest',
+          outputPath,
+        ]
+      : [
+          '-y',
+          '-loglevel',
+          'error',
+          ...hlsInputOpts,
+          '-i',
+          videoStreamUrl,
+          '-map',
+          '0:v:0',
+          '-map',
+          '0:a:0?',
+          '-c',
+          'copy',
+          outputPath,
+        ];
     await execFileAsync('ffmpeg', ffmpegArgs, { timeout: 5 * 60_000 });
   } else if (!audioStreamUrl) {
     await streamUrlToLocalFile({

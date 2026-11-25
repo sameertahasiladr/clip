@@ -38,28 +38,40 @@ async function isYtDlpAvailable(): Promise<boolean> {
   return Boolean(await resolveYtDlpCommand());
 }
 
-async function probeLocalVideoDuration(filePath: string): Promise<number> {
+async function probeLocalVideoInfo(
+  filePath: string
+): Promise<{ duration: number; width: number; height: number }> {
   const { stdout } = await execFileAsync(
     'ffprobe',
     [
       '-v',
       'error',
+      '-select_streams',
+      'v:0',
       '-show_entries',
-      'format=duration',
+      'format=duration:stream=width,height',
       '-of',
-      'default=noprint_wrappers=1:nokey=1',
+      'json',
       filePath,
     ],
     { timeout: 15_000 }
   );
-  const seconds = Number.parseFloat(stdout.trim());
+  const parsed = JSON.parse(stdout) as {
+    format?: { duration?: string };
+    streams?: Array<{ width?: number; height?: number }>;
+  };
+  const seconds = Number.parseFloat(parsed.format?.duration ?? '');
   if (!Number.isFinite(seconds) || seconds <= 0) {
     throw new Error('Could not read downloaded video duration.');
   }
   if (seconds > config.maxVideoDurationSeconds) {
     throw new Error('Videos longer than 60 minutes are not supported.');
   }
-  return Math.round(seconds);
+  return {
+    duration: Math.round(seconds),
+    width: parsed.streams?.[0]?.width ?? 0,
+    height: parsed.streams?.[0]?.height ?? 0,
+  };
 }
 
 function buildRelativeCaptionCues(
@@ -258,9 +270,25 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
       );
     }
 
-    // Confirm exact duration from the downloaded MP4 file
+    // Confirm exact duration and resolution from the downloaded source video file
     try {
-      videoDuration = await probeLocalVideoDuration(downloadedVideoPath);
+      const probed = await probeLocalVideoInfo(downloadedVideoPath);
+      videoDuration = probed.duration;
+      logger.info('Probed downloaded source video quality', {
+        jobId,
+        videoId,
+        sourceWidth: probed.width,
+        sourceHeight: probed.height,
+        duration: probed.duration,
+      });
+      if (probed.height > 0 && probed.height < 720) {
+        logger.warn('Downloaded source video is below 720p; install yt-dlp for full 1080p/4K source quality', {
+          jobId,
+          videoId,
+          sourceWidth: probed.width,
+          sourceHeight: probed.height,
+        });
+      }
     } catch (probeErr) {
       if (probeErr instanceof Error && probeErr.message.includes('60 minutes')) {
         throw probeErr;

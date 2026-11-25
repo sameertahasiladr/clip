@@ -27,6 +27,7 @@ import {
   extractIpFamilyFromGoogleVideoUrl,
   extractStreamCandidates,
   isTrustedGoogleVideoStreamUrl,
+  parseBestHlsVariantUrls,
   parseDescriptionChapters,
   parseHlsMaxHeight,
   parseNetscapeCookies,
@@ -423,7 +424,7 @@ test('viral hook scorer ranks a strong hook above generic channel intros and pic
   assert.equal(picked[0].start, 20, 'Should pick the viral hook at 20s instead of the 0s channel intro');
 });
 
-test('buildVerticalFilterComplex supports Lanczos full vertical crop and horizontal-in-9:16 blurred fill', () => {
+test('buildVerticalFilterComplex supports Lanczos+unsharp full vertical crop and horizontal-in-9:16 blurred fill', () => {
   const fillFilter = buildVerticalFilterComplex({
     width: 1080,
     height: 1920,
@@ -431,7 +432,9 @@ test('buildVerticalFilterComplex supports Lanczos full vertical crop and horizon
     subtitleFilter: ',ass=clip-1.ass',
   });
   assert.ok(
-    fillFilter.includes('scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,setsar=1')
+    fillFilter.includes(
+      'scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos+accurate_rnd+full_chroma_int,crop=1080:1920,unsharp=5:5:0.45:3:3:0.0,setsar=1'
+    )
   );
   assert.ok(!fillFilter.includes('boxblur'));
   assert.ok(fillFilter.includes(',ass=clip-1.ass'));
@@ -443,7 +446,11 @@ test('buildVerticalFilterComplex supports Lanczos full vertical crop and horizon
     subtitleFilter: ',ass=clip-1.ass',
   });
   assert.ok(blurFilter.includes('boxblur=20:3[bg]'));
-  assert.ok(blurFilter.includes('force_original_aspect_ratio=decrease:flags=lanczos[fg]'));
+  assert.ok(
+    blurFilter.includes(
+      'force_original_aspect_ratio=decrease:flags=lanczos+accurate_rnd+full_chroma_int,unsharp=5:5:0.45:3:3:0.0[fg]'
+    )
+  );
   assert.ok(blurFilter.includes('[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,ass=clip-1.ass[vout]'));
 });
 
@@ -651,7 +658,7 @@ test('extractBestStreams and yt-dlp/ffmpeg settings prioritize highest video & c
   assert.ok(YTDLP_QUALITY_SORT.startsWith('res,fps,vbr,abr'));
 
   const encodeArgs = buildHighQualityEncodeArgs();
-  assert.ok(encodeArgs.includes('-crf') && encodeArgs[encodeArgs.indexOf('-crf') + 1] === '17');
+  assert.ok(encodeArgs.includes('-crf') && encodeArgs[encodeArgs.indexOf('-crf') + 1] === '16');
   assert.ok(encodeArgs.includes('-profile:v') && encodeArgs[encodeArgs.indexOf('-profile:v') + 1] === 'high');
   assert.ok(encodeArgs.includes('-b:a') && encodeArgs[encodeArgs.indexOf('-b:a') + 1] === '192k');
   assert.ok(encodeArgs.includes('-ar') && encodeArgs[encodeArgs.indexOf('-ar') + 1] === '48000');
@@ -751,6 +758,40 @@ test('parseHlsMaxHeight, HLS stream candidate extraction, and IP family detectio
   assert.equal(
     extractIpFamilyFromGoogleVideoUrl('https://manifest.googlevideo.com/api/manifest/hls_variant/ip/2405%3A201%3A%3A1/index.m3u8'),
     6
+  );
+
+  // parseBestHlsVariantUrls must pick the highest-res 1080p/2160p video + matching 234 audio (not 144p)
+  const youtubeMasterM3u8 = [
+    '#EXTM3U',
+    '#EXT-X-MEDIA:URI="https://manifest.googlevideo.com/audio233.m3u8",TYPE=AUDIO,GROUP-ID="233",DEFAULT=YES,AUTOSELECT=YES',
+    '#EXT-X-MEDIA:URI="https://manifest.googlevideo.com/audio234.m3u8",TYPE=AUDIO,GROUP-ID="234",DEFAULT=YES,AUTOSELECT=YES',
+    '#EXT-X-STREAM-INF:BANDWIDTH=248000,RESOLUTION=256x144,AUDIO="233"',
+    'https://manifest.googlevideo.com/v144.m3u8',
+    '#EXT-X-STREAM-INF:BANDWIDTH=5200000,RESOLUTION=1920x1080,AUDIO="234"',
+    'https://manifest.googlevideo.com/v1080.m3u8',
+    '#EXT-X-STREAM-INF:BANDWIDTH=18000000,RESOLUTION=3840x2160,AUDIO="234"',
+    'https://manifest.googlevideo.com/v2160.m3u8',
+  ].join('\n');
+
+  const bestHls = parseBestHlsVariantUrls(
+    youtubeMasterM3u8,
+    'https://manifest.googlevideo.com/master.m3u8'
+  );
+  assert.deepEqual(bestHls, {
+    videoUrl: 'https://manifest.googlevideo.com/v2160.m3u8',
+    audioUrl: 'https://manifest.googlevideo.com/audio234.m3u8',
+    height: 2160,
+  });
+
+  // Reject untrusted hosts inside HLS playlists
+  const evilM3u8 = [
+    '#EXTM3U',
+    '#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080',
+    'https://evil.example.com/v1080.m3u8',
+  ].join('\n');
+  assert.equal(
+    parseBestHlsVariantUrls(evilM3u8, 'https://manifest.googlevideo.com/master.m3u8'),
+    null
   );
 });
 
