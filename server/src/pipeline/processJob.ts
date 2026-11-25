@@ -13,8 +13,13 @@ import { transcribeWithWhisper } from '../services/whisper.js';
 import {
   downloadYouTubeStreamsToFile,
   fetchYouTubeVideoInfo,
+  type StreamCandidate,
 } from '../services/youtubeFetch.js';
-import { downloadVideo, tryFetchYouTubeCaptions } from '../services/ytdlp.js';
+import {
+  downloadVideo,
+  resolveYtDlpCommand,
+  tryFetchYouTubeCaptions,
+} from '../services/ytdlp.js';
 import type { CaptionCue, ClipResult, JobRecord, TranscriptSegment } from '../types.js';
 import { parseCanonicalYouTubeUrl } from '../validation.js';
 
@@ -30,12 +35,7 @@ function hasCloudinaryConfig(): boolean {
 }
 
 async function isYtDlpAvailable(): Promise<boolean> {
-  try {
-    await execFileAsync('yt-dlp', ['--version'], { timeout: 3000 });
-    return true;
-  } catch {
-    return false;
-  }
+  return Boolean(await resolveYtDlpCommand());
 }
 
 async function probeLocalVideoDuration(filePath: string): Promise<number> {
@@ -187,8 +187,10 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
       }
     }
 
+    let lastDirectDownloadError = '';
+
     if (!downloadedVideoPath && (videoInfo.streamCandidates.length > 0 || videoInfo.streamUrl)) {
-      const candidates =
+      const candidates: StreamCandidate[] =
         videoInfo.streamCandidates.length > 0
           ? videoInfo.streamCandidates
           : [
@@ -206,8 +208,9 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
           downloadedVideoPath = await downloadYouTubeStreamsToFile({
             videoStreamUrl: candidate.videoUrl,
             audioStreamUrl: candidate.audioUrl,
+            isHls: candidate.isHls,
             userAgent: candidate.userAgent,
-            cookieHeader: videoInfo.cookieHeader,
+            cookieHeader: candidate.useCookies ? videoInfo.cookieHeader : undefined,
             jobDir,
           });
           logger.info('Downloaded YouTube video via direct stream into server temp folder', {
@@ -215,16 +218,19 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
             videoId,
             client: candidate.clientName,
             height: candidate.height,
+            isHls: Boolean(candidate.isHls),
             adaptiveMux: Boolean(candidate.audioUrl),
           });
           break;
         } catch (err) {
+          lastDirectDownloadError = err instanceof Error ? err.message : 'unknown';
           logger.warn('Direct stream candidate download failed; trying next quality fallback', {
             jobId,
             videoId,
             client: candidate.clientName,
             height: candidate.height,
-            reason: err instanceof Error ? err.message : 'unknown',
+            isHls: Boolean(candidate.isHls),
+            reason: lastDirectDownloadError,
           });
         }
       }
@@ -238,6 +244,12 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
       if (botBlocked) {
         throw new Error(
           'YouTube blocked unauthenticated download from this cloud server IP ("Sign in to confirm you\'re not a bot"). To enable server-side downloading for all YouTube links from a cloud host, set YTDLP_COOKIES_B64 (base64-encoded YouTube cookies.txt) or YTDLP_PROXY in your server environment, or run ClipGenie locally with Docker (docker compose up).'
+        );
+      }
+
+      if (!ytdlpInstalled && /403|Forbidden/i.test(lastDirectDownloadError)) {
+        throw new Error(
+          'YouTube blocked the direct server stream with HTTP 403 for this video. Install yt-dlp on your machine (Windows: winget install yt-dlp.yt-dlp or pip install -U yt-dlp) and restart the server for reliable 4K/1080p downloads.'
         );
       }
 

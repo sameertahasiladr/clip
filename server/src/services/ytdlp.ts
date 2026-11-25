@@ -71,15 +71,59 @@ export async function resolveCookiesFile(jobDir?: string): Promise<string | null
   return null;
 }
 
+export interface YtDlpCommand {
+  bin: string;
+  prefixArgs: string[];
+}
+
+let cachedYtDlpCmd: YtDlpCommand | null | undefined;
+
+/**
+ * Resolves a working yt-dlp executable across Linux, macOS, and Windows
+ * (supports yt-dlp in PATH as well as python/py/python3 -m yt_dlp).
+ */
+export async function resolveYtDlpCommand(): Promise<YtDlpCommand | null> {
+  if (cachedYtDlpCmd !== undefined) return cachedYtDlpCmd;
+
+  const candidates: YtDlpCommand[] = [
+    { bin: 'yt-dlp', prefixArgs: [] },
+    { bin: 'python', prefixArgs: ['-m', 'yt_dlp'] },
+    { bin: 'py', prefixArgs: ['-m', 'yt_dlp'] },
+    { bin: 'python3', prefixArgs: ['-m', 'yt_dlp'] },
+  ];
+
+  for (const cmd of candidates) {
+    try {
+      await execFileAsync(cmd.bin, [...cmd.prefixArgs, '--version'], { timeout: 4000 });
+      cachedYtDlpCmd = cmd;
+      return cmd;
+    } catch {
+      // Try next executable candidate
+    }
+  }
+
+  cachedYtDlpCmd = null;
+  return null;
+}
+
+async function execYtDlp(
+  args: string[],
+  options: { maxBuffer: number; timeout: number }
+): Promise<{ stdout: string; stderr: string }> {
+  const cmd = await resolveYtDlpCommand();
+  if (!cmd) {
+    throw new Error('yt-dlp is not installed on this system.');
+  }
+  return execFileAsync(cmd.bin, [...cmd.prefixArgs, ...args], options);
+}
+
 async function buildYtDlpBaseArgs(jobDir?: string): Promise<string[]> {
   const args = [
     '--force-ipv4',
     '--no-playlist',
     '--no-warnings',
-    '--js-runtimes',
-    'node',
     '--extractor-args',
-    'youtube:player_client=android_vr,android,ios,mweb,web',
+    'youtube:player_client=android_vr,ios,tv_embedded,web',
   ];
 
   const cookiesFile = await resolveCookiesFile(jobDir);
@@ -104,8 +148,7 @@ export async function fetchVideoMetadata(
   jobDir?: string
 ): Promise<VideoMetadata> {
   const baseArgs = await buildYtDlpBaseArgs(jobDir);
-  const { stdout } = await execFileAsync(
-    'yt-dlp',
+  const { stdout } = await execYtDlp(
     ['--dump-single-json', ...baseArgs, '--', canonicalUrl],
     { maxBuffer: 10 * 1024 * 1024, timeout: 60_000 }
   );
@@ -148,8 +191,7 @@ export async function downloadVideo(canonicalUrl: string, jobDir: string): Promi
   const outputTemplate = assertPathInside(jobDir, path.join(jobDir, 'source.%(ext)s'));
   const baseArgs = await buildYtDlpBaseArgs(jobDir);
 
-  await execFileAsync(
-    'yt-dlp',
+  await execYtDlp(
     [
       ...baseArgs,
       '-f',

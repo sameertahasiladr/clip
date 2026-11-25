@@ -24,9 +24,11 @@ import {
   buildYouTubeCookieHeaders,
   ensureEnglishCaptionUrl,
   extractBestStreams,
+  extractIpFamilyFromGoogleVideoUrl,
   extractStreamCandidates,
   isTrustedGoogleVideoStreamUrl,
   parseDescriptionChapters,
+  parseHlsMaxHeight,
   parseNetscapeCookies,
   parseTimedTextXml,
 } from './services/youtubeFetch.js';
@@ -697,6 +699,61 @@ test('extractBestStreams and yt-dlp/ffmpeg settings prioritize highest video & c
   assert.equal(chain[2].height, 360);
   assert.equal(chain[2].audioUrl, null);
 });
+
+test('parseHlsMaxHeight, HLS stream candidate extraction, and IP family detection work accurately', () => {
+  const m3u8 = [
+    '#EXTM3U',
+    '#EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=640x360',
+    'https://manifest.googlevideo.com/360.m3u8',
+    '#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080',
+    'https://manifest.googlevideo.com/1080.m3u8',
+    '#EXT-X-STREAM-INF:BANDWIDTH=20000000,RESOLUTION=3840x2160',
+    'https://manifest.googlevideo.com/2160.m3u8',
+  ].join('\n');
+
+  assert.equal(parseHlsMaxHeight(m3u8), 2160);
+  assert.equal(parseHlsMaxHeight('#EXTM3U\n#EXTINF:5.0,\nseg.ts'), 1080);
+
+  const trustedCandidates = extractStreamCandidates({
+    hlsManifestUrl: 'https://manifest.googlevideo.com/api/manifest/hls_variant/id/abc/ip/49.36.1.2/file/index.m3u8',
+    formats: [
+      {
+        url: 'https://rr1.googlevideo.com/videoplayback?itag=18&ip=49.36.1.2',
+        mimeType: 'video/mp4; codecs="avc1.42001E, mp4a.40.2"',
+        height: 360,
+      },
+    ],
+  });
+  assert.equal(trustedCandidates.length, 2);
+  assert.equal(trustedCandidates[0].isHls, true);
+  assert.equal(trustedCandidates[0].height, 1080);
+  assert.equal(trustedCandidates[1].height, 360);
+
+  // Must reject untrusted non-googlevideo HLS URLs (SSRF protection)
+  const untrustedCandidates = extractStreamCandidates({
+    hlsManifestUrl: 'https://evil.example.com/manifest.m3u8',
+  });
+  assert.equal(untrustedCandidates.length, 0);
+
+  // Must detect IPv4 vs IPv6 signed stream bindings from query param or HLS path
+  assert.equal(
+    extractIpFamilyFromGoogleVideoUrl('https://rr1.googlevideo.com/videoplayback?ip=49.36.12.5'),
+    4
+  );
+  assert.equal(
+    extractIpFamilyFromGoogleVideoUrl('https://rr1.googlevideo.com/videoplayback?ip=2405%3A201%3A1%3A%3A2'),
+    6
+  );
+  assert.equal(
+    extractIpFamilyFromGoogleVideoUrl('https://manifest.googlevideo.com/api/manifest/hls_variant/ip/49.36.12.5/index.m3u8'),
+    4
+  );
+  assert.equal(
+    extractIpFamilyFromGoogleVideoUrl('https://manifest.googlevideo.com/api/manifest/hls_variant/ip/2405%3A201%3A%3A1/index.m3u8'),
+    6
+  );
+});
+
 
 
 

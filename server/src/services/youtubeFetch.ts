@@ -2,8 +2,9 @@ import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
+import http from 'node:http';
+import https from 'node:https';
 import path from 'node:path';
-import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import { config } from '../config.js';
@@ -30,6 +31,8 @@ export interface StreamCandidate {
   height: number;
   userAgent: string;
   clientName: string;
+  isHls?: boolean;
+  useCookies?: boolean;
 }
 
 export interface YouTubeVideoInfo {
@@ -247,6 +250,131 @@ export function isTrustedGoogleVideoStreamUrl(rawUrl: string): boolean {
   }
 }
 
+/**
+ * Parses the highest video resolution height from an HLS master playlist (#EXT-X-STREAM-INF).
+ */
+export function parseHlsMaxHeight(m3u8Text: string): number {
+  let maxHeight = 0;
+  const regex = /RESOLUTION=\d+x(\d+)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(m3u8Text)) !== null) {
+    const h = Number(match[1]);
+    if (Number.isFinite(h) && h > maxHeight) {
+      maxHeight = h;
+    }
+  }
+  return maxHeight > 0 ? maxHeight : 1080;
+}
+
+/**
+ * Extracts the IP address family (4 or 6) embedded in a signed googlevideo.com URL (`ip=` query
+ * param or `/ip/<addr>/` path segment) so downloads connect over the exact same IP version
+ * that YouTube bound the signature to (prevents dual-stack IPv4/IPv6 HTTP 403s).
+ */
+export function extractIpFamilyFromGoogleVideoUrl(rawUrl: string): 4 | 6 | undefined {
+  try {
+    const parsed = new URL(rawUrl);
+    let ip = parsed.searchParams.get('ip') ?? '';
+    if (!ip) {
+      const pathMatch = parsed.pathname.match(/\/ip\/([^/]+)/);
+      if (pathMatch) {
+        ip = decodeURIComponent(pathMatch[1]);
+      }
+    }
+    if (!ip) return undefined;
+    if (ip.includes(':')) return 6;
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return 4;
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function openHttpsStreamWithRedirects(params: {
+  url: string;
+  method?: 'GET' | 'POST';
+  headers: Record<string, string>;
+  body?: string;
+  family?: 4 | 6;
+  timeoutMs: number;
+  requireTrustedGoogleVideoRedirect?: boolean;
+  maxRedirects?: number;
+}): Promise<http.IncomingMessage> {
+  const maxRedirects = params.maxRedirects ?? 5;
+
+  const attempt = (currentUrl: string, redirectsLeft: number): Promise<http.IncomingMessage> =>
+    new Promise((resolve, reject) => {
+      const parsed = new URL(currentUrl);
+      const req = https.request(
+        {
+          protocol: parsed.protocol,
+          hostname: parsed.hostname,
+          port: parsed.port || 443,
+          path: parsed.pathname + parsed.search,
+          method: params.method ?? 'GET',
+          headers: params.headers,
+          family: params.family,
+          timeout: params.timeoutMs,
+        },
+        (res) => {
+          const status = res.statusCode ?? 0;
+          const location = res.headers.location;
+          if (
+            (status === 301 || status === 302 || status === 303 || status === 307 || status === 308) &&
+            location &&
+            redirectsLeft > 0
+          ) {
+            res.resume();
+            let nextUrl: string;
+            try {
+              nextUrl = new URL(location, currentUrl).toString();
+            } catch {
+              reject(new Error('Invalid redirect location from YouTube media server.'));
+              return;
+            }
+            if (
+              params.requireTrustedGoogleVideoRedirect &&
+              !isTrustedGoogleVideoStreamUrl(nextUrl)
+            ) {
+              reject(new Error('Refused redirect to untrusted host.'));
+              return;
+            }
+            attempt(nextUrl, redirectsLeft - 1).then(resolve, reject);
+            return;
+          }
+          resolve(res);
+        }
+      );
+
+      req.on('timeout', () => {
+        req.destroy(new Error(`HTTPS request timed out after ${params.timeoutMs}ms`));
+      });
+      req.on('error', reject);
+
+      if (params.body) {
+        req.write(params.body);
+      }
+      req.end();
+    });
+
+  return attempt(params.url, maxRedirects);
+}
+
+async function readIncomingMessageText(res: http.IncomingMessage, maxBytes = 2 * 1024 * 1024): Promise<string> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of res) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buf.length;
+    if (total > maxBytes) {
+      res.destroy();
+      break;
+    }
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 function extractBalancedJson(source: string, marker: string): Record<string, unknown> | null {
   const markerIdx = source.indexOf(marker);
   if (markerIdx === -1) return null;
@@ -319,6 +447,7 @@ interface InnertubePlayerData {
   streamingData?: {
     formats?: RawStreamFormat[];
     adaptiveFormats?: RawStreamFormat[];
+    hlsManifestUrl?: string;
   };
 }
 
@@ -326,13 +455,13 @@ export interface ExtractedStreamPair {
   videoUrl: string;
   audioUrl: string | null;
   height: number;
+  isHls?: boolean;
 }
 
 /**
  * Returns a deduplicated, quality-ordered list of stream candidates from highest resolution
- * adaptive (4K/1440p/1080p60) -> highest H.264/M4A adaptive -> highest muxed MP4 fallback,
- * so if YouTube returns HTTP 403 on a PO-token-gated adaptive stream we fall back cleanly
- * to the highest working stream without failing the job.
+ * adaptive (4K/1440p/1080p60) -> highest H.264/M4A adaptive -> HLS master playlist (1080p/4K,
+ * bypasses adaptive PO-token 403s) -> highest muxed MP4 fallback.
  */
 export function extractStreamCandidates(
   streamingData?: InnertubePlayerData['streamingData']
@@ -390,7 +519,7 @@ export function extractStreamCandidates(
   const candidates: ExtractedStreamPair[] = [];
   const seenKeys = new Set<string>();
   const pushUnique = (pair: ExtractedStreamPair) => {
-    const key = `${pair.videoUrl}|${pair.audioUrl ?? ''}`;
+    const key = `${pair.videoUrl}|${pair.audioUrl ?? ''}|${pair.isHls ? 'hls' : 'http'}`;
     if (!seenKeys.has(key)) {
       seenKeys.add(key);
       candidates.push(pair);
@@ -428,7 +557,20 @@ export function extractStreamCandidates(
     });
   }
 
-  // 4. Highest resolution muxed stream (rarely blocked by adaptive PO-token 403s)
+  // 4. HLS master playlist (IOS client provides 1080p/1440p/4K HLS without GVS PO-token 403s)
+  if (
+    typeof streamingData.hlsManifestUrl === 'string' &&
+    isTrustedGoogleVideoStreamUrl(streamingData.hlsManifestUrl)
+  ) {
+    pushUnique({
+      videoUrl: streamingData.hlsManifestUrl,
+      audioUrl: null,
+      height: 1080,
+      isHls: true,
+    });
+  }
+
+  // 5. Highest resolution muxed stream (fallback if adaptive + HLS fail)
   for (const muxed of muxedStreams.slice(0, 2)) {
     if (muxed.url) {
       pushUnique({
@@ -516,10 +658,13 @@ async function fetchBestCaptionTrack(
 interface ClientSpec {
   name: string;
   ua: string;
+  clientNameId?: string;
+  clientVersion?: string;
   endpoint?: 'googleapis' | 'youtube';
   useAuthCookies?: boolean;
   skipVisitorData?: boolean;
   client: Record<string, unknown>;
+  thirdParty?: Record<string, unknown>;
 }
 
 function getConfiguredProxy(): string | null {
@@ -552,14 +697,40 @@ async function postJsonRequest(params: {
     return JSON.parse(stdout) as Record<string, unknown>;
   }
 
-  const resp = await fetch(params.url, {
-    method: 'POST',
-    headers: params.headers,
-    body: params.body,
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!resp.ok) return null;
-  return (await resp.json()) as Record<string, unknown>;
+  // Prefer IPv4 first so signed googlevideo.com URLs bind to IPv4 consistently across Node & FFmpeg
+  const requestHeaders: Record<string, string> = {
+    ...params.headers,
+    'Content-Length': String(Buffer.byteLength(params.body)),
+  };
+
+  let res: http.IncomingMessage;
+  try {
+    res = await openHttpsStreamWithRedirects({
+      url: params.url,
+      method: 'POST',
+      headers: requestHeaders,
+      body: params.body,
+      family: 4,
+      timeoutMs: 10_000,
+    });
+  } catch {
+    res = await openHttpsStreamWithRedirects({
+      url: params.url,
+      method: 'POST',
+      headers: requestHeaders,
+      body: params.body,
+      timeoutMs: 10_000,
+    });
+  }
+
+  const status = res.statusCode ?? 0;
+  if (status < 200 || status >= 300) {
+    res.resume();
+    return null;
+  }
+
+  const raw = await readIncomingMessageText(res, 10 * 1024 * 1024);
+  return JSON.parse(raw) as Record<string, unknown>;
 }
 
 /**
@@ -626,8 +797,13 @@ export async function fetchYouTubeVideoInfo(
 
   const proxyUrl = getConfiguredProxy();
 
-  // Fast 1-byte Range probe to confirm a googlevideo.com stream returns 200/206 (not HTTP 403 PO-token block)
-  const probeUrlPlayable = async (url: string, userAgent: string): Promise<boolean> => {
+  // Probe with the exact same GET headers & IP family used for downloading (no Range: bytes=0-0
+  // mismatch, and only send Cookie when the client actually authenticated with cookies).
+  const probeUrlPlayable = async (
+    url: string,
+    userAgent: string,
+    cookieHeader?: string
+  ): Promise<boolean> => {
     if (!isTrustedGoogleVideoStreamUrl(url)) return false;
     try {
       if (proxyUrl) {
@@ -647,8 +823,8 @@ export async function fetchYouTubeVideoInfo(
             '-A',
             userAgent,
             '-H',
-            'Range: bytes=0-0',
-            ...(authCookies?.cookieHeader ? ['-H', `Cookie: ${authCookies.cookieHeader}`] : []),
+            'Accept: */*',
+            ...(cookieHeader ? ['-H', `Cookie: ${cookieHeader}`] : []),
             '--',
             url,
           ],
@@ -658,32 +834,101 @@ export async function fetchYouTubeVideoInfo(
         return code === 200 || code === 206;
       }
 
-      const res = await fetch(url, {
+      const family = extractIpFamilyFromGoogleVideoUrl(url);
+      const res = await openHttpsStreamWithRedirects({
+        url,
         method: 'GET',
         headers: {
           'User-Agent': userAgent,
-          Range: 'bytes=0-0',
-          ...(authCookies?.cookieHeader ? { Cookie: authCookies.cookieHeader } : {}),
+          Accept: '*/*',
+          'Accept-Encoding': 'identity',
+          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
         },
-        signal: AbortSignal.timeout(6_000),
+        family,
+        timeoutMs: 6_000,
+        requireTrustedGoogleVideoRedirect: true,
       });
-      // Immediately cancel body after receiving response status
-      try {
-        await res.body?.cancel();
-      } catch {
-        // Ignore stream cancel errors
-      }
-      return res.status === 200 || res.status === 206;
+      const status = res.statusCode ?? 0;
+      res.destroy();
+      return status === 200 || status === 206;
     } catch {
       return false;
     }
   };
 
+  const probeHlsManifestPlayable = async (
+    url: string,
+    userAgent: string,
+    cookieHeader?: string
+  ): Promise<number | null> => {
+    if (!isTrustedGoogleVideoStreamUrl(url)) return null;
+    try {
+      let text = '';
+      if (proxyUrl) {
+        const { stdout } = await execFileAsync(
+          'curl',
+          [
+            '-fsSL',
+            '-4',
+            '--max-time',
+            '8',
+            '--proxy',
+            proxyUrl,
+            '-A',
+            userAgent,
+            ...(cookieHeader ? ['-H', `Cookie: ${cookieHeader}`] : []),
+            '--',
+            url,
+          ],
+          { maxBuffer: 2 * 1024 * 1024, timeout: 10_000 }
+        );
+        text = stdout;
+      } else {
+        const family = extractIpFamilyFromGoogleVideoUrl(url);
+        const res = await openHttpsStreamWithRedirects({
+          url,
+          method: 'GET',
+          headers: {
+            'User-Agent': userAgent,
+            Accept: '*/*',
+            ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+          },
+          family,
+          timeoutMs: 6_000,
+          requireTrustedGoogleVideoRedirect: true,
+        });
+        const status = res.statusCode ?? 0;
+        if (status < 200 || status >= 300) {
+          res.destroy();
+          return null;
+        }
+        text = await readIncomingMessageText(res, 1024 * 1024);
+      }
+
+      if (!text.includes('#EXTM3U')) return null;
+      return parseHlsMaxHeight(text);
+    } catch {
+      return null;
+    }
+  };
+
   const probeCandidatePlayable = async (candidate: StreamCandidate): Promise<boolean> => {
-    const videoOk = await probeUrlPlayable(candidate.videoUrl, candidate.userAgent);
+    const cookieHeader = candidate.useCookies ? authCookies?.cookieHeader : undefined;
+    if (candidate.isHls) {
+      const hlsHeight = await probeHlsManifestPlayable(
+        candidate.videoUrl,
+        candidate.userAgent,
+        cookieHeader
+      );
+      if (hlsHeight === null) return false;
+      candidate.height = hlsHeight;
+      return true;
+    }
+
+    const videoOk = await probeUrlPlayable(candidate.videoUrl, candidate.userAgent, cookieHeader);
     if (!videoOk) return false;
     if (candidate.audioUrl) {
-      return probeUrlPlayable(candidate.audioUrl, candidate.userAgent);
+      return probeUrlPlayable(candidate.audioUrl, candidate.userAgent, cookieHeader);
     }
     return true;
   };
@@ -695,6 +940,7 @@ export async function fetchYouTubeVideoInfo(
         ...pair,
         userAgent: WEB_UA,
         clientName: 'WEB_HTML',
+        useCookies: Boolean(authCookies?.cookieHeader),
       });
     }
   }
@@ -708,6 +954,8 @@ export async function fetchYouTubeVideoInfo(
       {
         name: 'TVHTML5_AUTH',
         ua: 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version',
+        clientNameId: '7',
+        clientVersion: '7.20250312.16.00',
         useAuthCookies: true,
         client: {
           clientName: 'TVHTML5',
@@ -719,6 +967,8 @@ export async function fetchYouTubeVideoInfo(
       {
         name: 'ANDROID_AUTH',
         ua: ANDROID_INNERTUBE_UA,
+        clientNameId: '3',
+        clientVersion: '20.10.38',
         useAuthCookies: true,
         client: {
           clientName: 'ANDROID',
@@ -731,6 +981,8 @@ export async function fetchYouTubeVideoInfo(
       {
         name: 'MWEB_AUTH',
         ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
+        clientNameId: '2',
+        clientVersion: '2.20250312.01.00',
         useAuthCookies: true,
         client: {
           clientName: 'MWEB',
@@ -742,16 +994,19 @@ export async function fetchYouTubeVideoInfo(
     );
   }
 
-  // Prioritize ANDROID_VR and IOS first — they serve 4K/1440p/1080p adaptive streams without ANDROID's HTTP 403 PO-token block
+  // Prioritize ANDROID_VR (direct 4K/1080p adaptive without PO-token 403), IOS (1080p/4K HLS manifest
+  // without PO-token 403), and TVHTML5_SIMPLY_EMBEDDED_PLAYER (music-video friendly)
   clientQueue.push(
     {
       name: 'ANDROID_VR',
-      ua: 'com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
+      ua: 'com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
+      clientNameId: '28',
+      clientVersion: '1.65.10',
       endpoint: 'googleapis',
       skipVisitorData: true,
       client: {
         clientName: 'ANDROID_VR',
-        clientVersion: '1.62.27',
+        clientVersion: '1.65.10',
         deviceMake: 'Oculus',
         deviceModel: 'Quest 3',
         osName: 'Android',
@@ -764,6 +1019,8 @@ export async function fetchYouTubeVideoInfo(
     {
       name: 'IOS',
       ua: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
+      clientNameId: '5',
+      clientVersion: '20.10.4',
       endpoint: 'googleapis',
       skipVisitorData: true,
       client: {
@@ -778,8 +1035,27 @@ export async function fetchYouTubeVideoInfo(
       },
     },
     {
+      name: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
+      ua: 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version',
+      clientNameId: '85',
+      clientVersion: '2.0',
+      endpoint: 'googleapis',
+      skipVisitorData: true,
+      client: {
+        clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
+        clientVersion: '2.0',
+        hl: 'en',
+        gl: 'US',
+      },
+      thirdParty: {
+        embedUrl: 'https://www.youtube.com/',
+      },
+    },
+    {
       name: 'ANDROID',
       ua: ANDROID_INNERTUBE_UA,
+      clientNameId: '3',
+      clientVersion: '20.10.38',
       endpoint: 'googleapis',
       skipVisitorData: true,
       client: {
@@ -793,6 +1069,8 @@ export async function fetchYouTubeVideoInfo(
     {
       name: 'ANDROID_KIDS',
       ua: 'com.google.android.apps.youtube.kids/9.45.2 (Linux; U; Android 14) gzip',
+      clientNameId: '31',
+      clientVersion: '9.45.2',
       endpoint: 'googleapis',
       skipVisitorData: true,
       client: {
@@ -806,6 +1084,8 @@ export async function fetchYouTubeVideoInfo(
     {
       name: 'IOS_KIDS',
       ua: 'com.google.ios.youtubekids/9.45 (iPhone16,2; U; CPU iOS 18_1 like Mac OS X)',
+      clientNameId: '32',
+      clientVersion: '9.45',
       endpoint: 'googleapis',
       skipVisitorData: true,
       client: {
@@ -818,6 +1098,8 @@ export async function fetchYouTubeVideoInfo(
     {
       name: 'TVHTML5',
       ua: 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version',
+      clientNameId: '7',
+      clientVersion: '7.20250312.16.00',
       endpoint: 'youtube',
       client: {
         clientName: 'TVHTML5',
@@ -842,6 +1124,8 @@ export async function fetchYouTubeVideoInfo(
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
         'User-Agent': spec.ua,
+        ...(spec.clientNameId ? { 'X-YouTube-Client-Name': spec.clientNameId } : {}),
+        ...(spec.clientVersion ? { 'X-YouTube-Client-Version': spec.clientVersion } : {}),
         ...(includeVisitor && visitorData ? { 'X-Goog-Visitor-Id': visitorData } : {}),
       };
       if (spec.useAuthCookies && authCookies) {
@@ -863,6 +1147,7 @@ export async function fetchYouTubeVideoInfo(
               ...spec.client,
               ...(includeVisitor && visitorData ? { visitorData } : {}),
             },
+            ...(spec.thirdParty ? { thirdParty: spec.thirdParty } : {}),
           },
           contentCheckOk: true,
           racyCheckOk: true,
@@ -902,6 +1187,7 @@ export async function fetchYouTubeVideoInfo(
             ...pair,
             userAgent: spec.ua,
             clientName: spec.name,
+            useCookies: Boolean(spec.useAuthCookies && authCookies?.cookieHeader),
           };
           collectedCandidates.push(candidate);
 
@@ -922,6 +1208,7 @@ export async function fetchYouTubeVideoInfo(
             videoId,
             client: verifiedBestCandidate.clientName,
             height: verifiedBestCandidate.height,
+            isHls: Boolean(verifiedBestCandidate.isHls),
             adaptiveMux: Boolean(verifiedBestCandidate.audioUrl),
           });
           break;
@@ -942,7 +1229,7 @@ export async function fetchYouTubeVideoInfo(
   const streamCandidates: StreamCandidate[] = [];
   const seenCandidateKeys = new Set<string>();
   for (const c of [...orderedVerified, ...orderedAll]) {
-    const key = `${c.videoUrl}|${c.audioUrl ?? ''}`;
+    const key = `${c.videoUrl}|${c.audioUrl ?? ''}|${c.isHls ? 'hls' : 'http'}`;
     if (!seenCandidateKeys.has(key)) {
       seenCandidateKeys.add(key);
       streamCandidates.push(c);
@@ -959,6 +1246,7 @@ export async function fetchYouTubeVideoInfo(
         videoId,
         client: chosen.clientName,
         height: chosen.height,
+        isHls: Boolean(chosen.isHls),
         verified: orderedVerified.length > 0,
         adaptiveMux: Boolean(chosen.audioUrl),
       });
@@ -1037,6 +1325,8 @@ async function streamUrlToLocalFile(params: {
       proxyUrl,
       '-A',
       params.userAgent,
+      '-H',
+      'Accept: */*',
       ...(params.cookieHeader ? ['-H', `Cookie: ${params.cookieHeader}`] : []),
       '-o',
       params.targetPath,
@@ -1047,34 +1337,43 @@ async function streamUrlToLocalFile(params: {
     return;
   }
 
-  const response = await fetch(params.url, {
+  const family = extractIpFamilyFromGoogleVideoUrl(params.url);
+  const res = await openHttpsStreamWithRedirects({
+    url: params.url,
+    method: 'GET',
     headers: {
       'User-Agent': params.userAgent,
+      Accept: '*/*',
+      'Accept-Encoding': 'identity',
       ...(params.cookieHeader ? { Cookie: params.cookieHeader } : {}),
     },
-    signal: AbortSignal.timeout(5 * 60_000),
+    family,
+    timeoutMs: 5 * 60_000,
+    requireTrustedGoogleVideoRedirect: true,
   });
 
-  if (!response.ok || !response.body) {
-    throw new Error(`YouTube media download failed with HTTP ${response.status}`);
+  const status = res.statusCode ?? 0;
+  if (status < 200 || status >= 300) {
+    res.destroy();
+    throw new Error(`YouTube media download failed with HTTP ${status}`);
   }
 
-  const webStream = response.body as unknown as Parameters<typeof Readable.fromWeb>[0];
-  await pipeline(Readable.fromWeb(webStream), createWriteStream(params.targetPath));
+  await pipeline(res, createWriteStream(params.targetPath));
 }
 
 /**
- * Downloads the resolved HTTPS googlevideo.com stream(s) into jobDir/source.mp4 once on the server
- * via native HTTP streaming so ffmpeg can cut all 1–5 vertical clips fast from local disk.
+ * Downloads the resolved HTTPS googlevideo.com stream(s) (direct progressive, adaptive video+audio,
+ * or HLS master playlist) into jobDir/source.(mkv|mp4) once on the server so ffmpeg can cut clips fast.
  */
 export async function downloadYouTubeStreamsToFile(params: {
   videoStreamUrl: string;
   audioStreamUrl?: string | null;
+  isHls?: boolean;
   userAgent: string;
   cookieHeader?: string;
   jobDir: string;
 }): Promise<string> {
-  const { videoStreamUrl, audioStreamUrl, userAgent, cookieHeader, jobDir } = params;
+  const { videoStreamUrl, audioStreamUrl, isHls, userAgent, cookieHeader, jobDir } = params;
 
   if (!isTrustedGoogleVideoStreamUrl(videoStreamUrl)) {
     throw new Error('Refused untrusted video stream URL.');
@@ -1084,12 +1383,34 @@ export async function downloadYouTubeStreamsToFile(params: {
   }
 
   const resolvedBase = path.resolve(jobDir);
-  const outputPath = path.resolve(resolvedBase, audioStreamUrl ? 'source.mkv' : 'source.mp4');
+  const outputPath = path.resolve(
+    resolvedBase,
+    audioStreamUrl || isHls ? 'source.mkv' : 'source.mp4'
+  );
   if (!outputPath.startsWith(resolvedBase + path.sep)) {
     throw new Error('Unsafe source video output path.');
   }
 
-  if (!audioStreamUrl) {
+  if (isHls) {
+    const proxyUrl = getConfiguredProxy();
+    // Do NOT pass -map 0:v:0 on a multi-variant HLS playlist: FFmpeg's default stream selection
+    // automatically picks the highest-resolution video variant + best audio stream.
+    const ffmpegArgs = [
+      '-y',
+      '-loglevel',
+      'error',
+      '-user_agent',
+      userAgent,
+      ...(cookieHeader ? ['-headers', `Cookie: ${cookieHeader}\r\n`] : []),
+      ...(proxyUrl && proxyUrl.startsWith('http://') ? ['-http_proxy', proxyUrl] : []),
+      '-i',
+      videoStreamUrl,
+      '-c',
+      'copy',
+      outputPath,
+    ];
+    await execFileAsync('ffmpeg', ffmpegArgs, { timeout: 5 * 60_000 });
+  } else if (!audioStreamUrl) {
     await streamUrlToLocalFile({
       url: videoStreamUrl,
       targetPath: outputPath,
