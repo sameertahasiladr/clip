@@ -122,8 +122,12 @@ async function buildYtDlpBaseArgs(jobDir?: string): Promise<string[]> {
     '--force-ipv4',
     '--no-playlist',
     '--no-warnings',
-    '--extractor-args',
-    'youtube:player_client=android_vr,ios,tv_embedded,web',
+    '--retries',
+    '3',
+    '--fragment-retries',
+    '3',
+    '--extractor-retries',
+    '2',
   ];
 
   const cookiesFile = await resolveCookiesFile(jobDir);
@@ -183,32 +187,57 @@ export async function fetchVideoMetadata(
 export const YTDLP_BEST_QUALITY_FORMAT = 'bestvideo+bestaudio/best';
 export const YTDLP_QUALITY_SORT = 'res,fps,vbr,abr,ext:mp4:m4a';
 
-/**
- * Downloads the highest available YouTube video & audio quality (including 4K/1440p/1080p60)
- * losslessly remuxed into the confined job directory.
- */
-export async function downloadVideo(canonicalUrl: string, jobDir: string): Promise<string> {
-  const outputTemplate = assertPathInside(jobDir, path.join(jobDir, 'source.%(ext)s'));
-  const baseArgs = await buildYtDlpBaseArgs(jobDir);
+export const YTDLP_DOWNLOAD_STRATEGIES: ReadonlyArray<{
+  name: string;
+  extraArgs: string[];
+  format: string;
+  sort: string;
+}> = [
+  {
+    // 1. yt-dlp's own built-in latest default client stack & JS challenge solver
+    name: 'default',
+    extraArgs: [],
+    format: YTDLP_BEST_QUALITY_FORMAT,
+    sort: YTDLP_QUALITY_SORT,
+  },
+  {
+    // 2. Safari + TV HLS streams (1080p/4K HLS bypasses HTTPS adaptive GVS PO-token 403s)
+    name: 'web_safari-hls',
+    extraArgs: ['--rm-cache-dir', '--extractor-args', 'youtube:player_client=web_safari,tv'],
+    format: 'bestvideo[protocol^=m3u8]+bestaudio[protocol^=m3u8]/bestvideo+bestaudio/best',
+    sort: 'res,fps,vbr,abr',
+  },
+  {
+    // 3. iOS + TV HLS streams (1080p/4K HLS fallback)
+    name: 'ios-hls',
+    extraArgs: ['--extractor-args', 'youtube:player_client=ios,tv'],
+    format:
+      'bestvideo[protocol^=m3u8]+bestaudio[protocol^=m3u8]/best[protocol^=m3u8]/bestvideo+bestaudio/best',
+    sort: 'res,fps,vbr,abr',
+  },
+  {
+    // 4. Embedded TV / mobile web / VR direct fallback
+    name: 'tv_embedded-fallback',
+    extraArgs: ['--extractor-args', 'youtube:player_client=tv_embedded,mweb,android_vr'],
+    format: YTDLP_BEST_QUALITY_FORMAT,
+    sort: 'res,fps,vbr,abr',
+  },
+];
 
-  await execYtDlp(
-    [
-      ...baseArgs,
-      '-f',
-      YTDLP_BEST_QUALITY_FORMAT,
-      '-S',
-      YTDLP_QUALITY_SORT,
-      '--merge-output-format',
-      'mkv',
-      '-o',
-      outputTemplate,
-      '--',
-      canonicalUrl,
-    ],
-    { maxBuffer: 20 * 1024 * 1024, timeout: 10 * 60_000 }
-  );
+async function cleanupPartialSourceFiles(jobDir: string): Promise<void> {
+  try {
+    const files = await fs.readdir(jobDir);
+    await Promise.all(
+      files
+        .filter((name) => name.startsWith('source.'))
+        .map((name) => fs.rm(assertPathInside(jobDir, path.join(jobDir, name)), { force: true }))
+    );
+  } catch {
+    // Ignore cleanup errors between retries
+  }
+}
 
-  // Locate the highest-quality merged source file (source.mkv, source.mp4, or source.webm)
+async function locateDownloadedSourceFile(jobDir: string): Promise<string | null> {
   const candidates = ['source.mkv', 'source.mp4', 'source.webm'];
   for (const name of candidates) {
     const candidatePath = assertPathInside(jobDir, path.join(jobDir, name));
@@ -224,10 +253,65 @@ export async function downloadVideo(canonicalUrl: string, jobDir: string): Promi
 
   const files = await fs.readdir(jobDir);
   const matched = files.find((f) => f.startsWith('source.') && !f.endsWith('.part'));
-  if (!matched) {
-    throw new Error('yt-dlp finished without producing a video file.');
+  if (!matched) return null;
+
+  const matchedPath = assertPathInside(jobDir, path.join(jobDir, matched));
+  const stat = await fs.stat(matchedPath);
+  return stat.size > 10_000 ? matchedPath : null;
+}
+
+/**
+ * Downloads the highest available YouTube video & audio quality (including 4K/1440p/1080p60)
+ * losslessly remuxed into the confined job directory, automatically retrying HLS & alternative
+ * player client strategies if YouTube returns HTTP 403 on HTTPS adaptive formats.
+ */
+export async function downloadVideo(canonicalUrl: string, jobDir: string): Promise<string> {
+  const outputTemplate = assertPathInside(jobDir, path.join(jobDir, 'source.%(ext)s'));
+  const baseArgs = await buildYtDlpBaseArgs(jobDir);
+  let lastError: unknown = null;
+
+  for (const strategy of YTDLP_DOWNLOAD_STRATEGIES) {
+    await cleanupPartialSourceFiles(jobDir);
+    try {
+      await execYtDlp(
+        [
+          ...baseArgs,
+          ...strategy.extraArgs,
+          '-f',
+          strategy.format,
+          '-S',
+          strategy.sort,
+          '--merge-output-format',
+          'mkv',
+          '-o',
+          outputTemplate,
+          '--',
+          canonicalUrl,
+        ],
+        { maxBuffer: 20 * 1024 * 1024, timeout: 10 * 60_000 }
+      );
+
+      const downloaded = await locateDownloadedSourceFile(jobDir);
+      if (downloaded) {
+        logger.info('yt-dlp downloaded source video successfully', {
+          strategy: strategy.name,
+          file: path.basename(downloaded),
+        });
+        return downloaded;
+      }
+    } catch (err) {
+      lastError = err;
+      logger.warn('yt-dlp strategy failed; trying next strategy', {
+        strategy: strategy.name,
+        reason: err instanceof Error ? err.message : 'unknown',
+      });
+    }
   }
-  return assertPathInside(jobDir, path.join(jobDir, matched));
+
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error('yt-dlp finished without producing a video file.');
 }
 
 function parseTimestampToSeconds(ts: string): number {

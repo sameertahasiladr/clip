@@ -9,10 +9,15 @@ import {
 } from './validation.js';
 import {
   YTDLP_BEST_QUALITY_FORMAT,
+  YTDLP_DOWNLOAD_STRATEGIES,
   YTDLP_QUALITY_SORT,
   isValidProxyUrl,
   parseSubtitlesToSegments,
 } from './services/ytdlp.js';
+import {
+  HD_TARGET_VIDEO_BITRATE,
+  HD_VERTICAL_VIDEO_FILTER,
+} from './pipeline/processJob.js';
 import {
   buildAssSubtitles,
   buildHighQualityEncodeArgs,
@@ -452,6 +457,18 @@ test('buildVerticalFilterComplex supports Lanczos+unsharp full vertical crop and
     )
   );
   assert.ok(blurFilter.includes('[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,ass=clip-1.ass[vout]'));
+
+  const explicitPadFilter = buildVerticalFilterComplex({
+    width: 1080,
+    height: 1920,
+    videoLayout: 'vertical-fill',
+    subtitleFilter: ',ass=clip-1.ass',
+    videoFilter: HD_VERTICAL_VIDEO_FILTER,
+  });
+  assert.equal(
+    explicitPadFilter,
+    '[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1,ass=clip-1.ass[vout]'
+  );
 });
 
 test('SocialAccountStore enforces single-use OAuth state, hides tokens in summary, and switches Meta pages', () => {
@@ -656,9 +673,13 @@ test('extractBestStreams and yt-dlp/ffmpeg settings prioritize highest video & c
 
   assert.equal(YTDLP_BEST_QUALITY_FORMAT, 'bestvideo+bestaudio/best');
   assert.ok(YTDLP_QUALITY_SORT.startsWith('res,fps,vbr,abr'));
+  assert.equal(YTDLP_DOWNLOAD_STRATEGIES[0].name, 'default');
+  assert.ok(YTDLP_DOWNLOAD_STRATEGIES.some((s) => s.name === 'web_safari-hls'));
 
-  const encodeArgs = buildHighQualityEncodeArgs();
-  assert.ok(encodeArgs.includes('-crf') && encodeArgs[encodeArgs.indexOf('-crf') + 1] === '16');
+  assert.equal(HD_TARGET_VIDEO_BITRATE, '8000k');
+  const encodeArgs = buildHighQualityEncodeArgs(HD_TARGET_VIDEO_BITRATE);
+  assert.ok(encodeArgs.includes('-b:v') && encodeArgs[encodeArgs.indexOf('-b:v') + 1] === '8000k');
+  assert.ok(encodeArgs.includes('-maxrate') && encodeArgs[encodeArgs.indexOf('-maxrate') + 1] === '12000k');
   assert.ok(encodeArgs.includes('-profile:v') && encodeArgs[encodeArgs.indexOf('-profile:v') + 1] === 'high');
   assert.ok(encodeArgs.includes('-b:a') && encodeArgs[encodeArgs.indexOf('-b:a') + 1] === '192k');
   assert.ok(encodeArgs.includes('-ar') && encodeArgs[encodeArgs.indexOf('-ar') + 1] === '48000');

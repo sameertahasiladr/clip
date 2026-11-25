@@ -173,8 +173,13 @@ export function buildVerticalFilterComplex(params: {
   height: number;
   videoLayout: VideoLayout;
   subtitleFilter: string;
+  videoFilter?: string;
 }): string {
-  const { width, height, videoLayout, subtitleFilter } = params;
+  const { width, height, videoLayout, subtitleFilter, videoFilter } = params;
+  if (videoFilter) {
+    return `[0:v]${videoFilter},setsar=1${subtitleFilter}[vout]`;
+  }
+
   const lanczosFlags = 'lanczos+accurate_rnd+full_chroma_int';
   const sharpen = 'unsharp=5:5:0.45:3:3:0.0';
 
@@ -191,10 +196,12 @@ export function buildVerticalFilterComplex(params: {
 
 /**
  * Highest-quality H.264 + AAC Shorts/Reels encoding arguments:
- * visually lossless CRF 16, High@4.2 profile, BT.709 true color metadata, and 192 kbps 48 kHz audio.
+ * >= 8000k HD target video bitrate, High@4.2 profile, BT.709 color metadata, and 192 kbps 48 kHz audio.
  */
-export function buildHighQualityEncodeArgs(): string[] {
+export function buildHighQualityEncodeArgs(videoBitrate = '8000k'): string[] {
   return [
+    '-sws_flags',
+    'lanczos',
     '-c:v',
     'libx264',
     '-profile:v',
@@ -203,8 +210,12 @@ export function buildHighQualityEncodeArgs(): string[] {
     '4.2',
     '-preset',
     'medium',
-    '-crf',
-    '16',
+    '-b:v',
+    videoBitrate,
+    '-maxrate',
+    '12000k',
+    '-bufsize',
+    '16000k',
     '-pix_fmt',
     'yuv420p',
     '-color_primaries',
@@ -228,9 +239,8 @@ export function buildHighQualityEncodeArgs(): string[] {
 
 /**
  * Cuts a single moment from a local source video OR direct YouTube stream URL, converts it to
- * 1080x1920 vertical 9:16 MP4 (either full-bleed vertical fill or centered horizontal with
- * blurred background), optionally burns in bold wrapped lower-third English captions, and
- * exports H.264 + AAC MP4 plus a JPEG poster frame.
+ * 1080x1920 vertical 9:16 MP4, optionally burns in bold wrapped lower-third English captions, and
+ * exports high-definition H.264 (>= 8000k) + AAC MP4 plus a JPEG poster frame.
  */
 export async function renderVerticalClip(params: {
   sourceInput: string;
@@ -241,6 +251,8 @@ export async function renderVerticalClip(params: {
   transcript: TranscriptSegment[];
   captions: boolean;
   videoLayout?: VideoLayout;
+  videoFilter?: string;
+  videoBitrate?: string;
   resolution?: '720x1280' | '1080x1920';
 }): Promise<RenderedClipArtifacts> {
   const {
@@ -252,6 +264,8 @@ export async function renderVerticalClip(params: {
     transcript,
     captions,
     videoLayout = 'vertical-fill',
+    videoFilter,
+    videoBitrate = '8000k',
     resolution = '1080x1920',
   } = params;
 
@@ -294,6 +308,7 @@ export async function renderVerticalClip(params: {
     height,
     videoLayout,
     subtitleFilter,
+    videoFilter,
   });
 
   const inputArgs: string[] = ['-y', '-loglevel', 'error'];
@@ -317,7 +332,7 @@ export async function renderVerticalClip(params: {
       '[vout]',
       '-map',
       '0:a?',
-      ...buildHighQualityEncodeArgs(),
+      ...buildHighQualityEncodeArgs(videoBitrate),
       outputFilename,
     ],
     { cwd: resolvedBase, timeout: 6 * 60_000 }
