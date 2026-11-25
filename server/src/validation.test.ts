@@ -11,6 +11,7 @@ import {
   YTDLP_BEST_QUALITY_FORMAT,
   YTDLP_DOWNLOAD_STRATEGIES,
   YTDLP_QUALITY_SORT,
+  isValidCookiesBrowser,
   isValidProxyUrl,
   parseSubtitlesToSegments,
 } from './services/ytdlp.js';
@@ -467,7 +468,7 @@ test('buildVerticalFilterComplex supports Lanczos+unsharp full vertical crop and
   });
   assert.equal(
     explicitPadFilter,
-    '[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1,ass=clip-1.ass[vout]'
+    '[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,unsharp=5:5:0.35:3:3:0.0,setsar=1,ass=clip-1.ass[vout]'
   );
 });
 
@@ -673,8 +674,11 @@ test('extractBestStreams and yt-dlp/ffmpeg settings prioritize highest video & c
 
   assert.equal(YTDLP_BEST_QUALITY_FORMAT, 'bestvideo+bestaudio/best');
   assert.ok(YTDLP_QUALITY_SORT.startsWith('res,fps,vbr,abr'));
-  assert.equal(YTDLP_DOWNLOAD_STRATEGIES[0].name, 'default');
-  assert.ok(YTDLP_DOWNLOAD_STRATEGIES.some((s) => s.name === 'web_safari-hls'));
+  assert.equal(YTDLP_DOWNLOAD_STRATEGIES[0].name, 'default-hd');
+  assert.ok(YTDLP_DOWNLOAD_STRATEGIES[0].format.includes('height>=720'));
+  assert.ok(YTDLP_DOWNLOAD_STRATEGIES.some((s) => s.name === 'web_safari-hls-hd'));
+  assert.equal(isValidCookiesBrowser('chrome'), true);
+  assert.equal(isValidCookiesBrowser('chrome; rm -rf /'), false);
 
   assert.equal(HD_TARGET_VIDEO_BITRATE, '8000k');
   const encodeArgs = buildHighQualityEncodeArgs(HD_TARGET_VIDEO_BITRATE);

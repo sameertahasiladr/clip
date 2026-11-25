@@ -1120,14 +1120,14 @@ export async function fetchYouTubeVideoInfo(
   clientQueue.push(
     {
       name: 'ANDROID_VR',
-      ua: 'com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
+      ua: 'com.google.android.apps.youtube.vr.oculus/1.71.26 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
       clientNameId: '28',
-      clientVersion: '1.65.10',
+      clientVersion: '1.71.26',
       endpoint: 'googleapis',
       skipVisitorData: true,
       client: {
         clientName: 'ANDROID_VR',
-        clientVersion: '1.65.10',
+        clientVersion: '1.71.26',
         deviceMake: 'Oculus',
         deviceModel: 'Quest 3',
         osName: 'Android',
@@ -1139,14 +1139,14 @@ export async function fetchYouTubeVideoInfo(
     },
     {
       name: 'IOS',
-      ua: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
+      ua: 'com.google.ios.youtube/21.02.3 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
       clientNameId: '5',
-      clientVersion: '20.10.4',
+      clientVersion: '21.02.3',
       endpoint: 'googleapis',
       skipVisitorData: true,
       client: {
         clientName: 'IOS',
-        clientVersion: '20.10.4',
+        clientVersion: '21.02.3',
         deviceMake: 'Apple',
         deviceModel: 'iPhone16,2',
         osName: 'iPhone',

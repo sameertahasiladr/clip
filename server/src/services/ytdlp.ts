@@ -74,13 +74,31 @@ export async function resolveCookiesFile(jobDir?: string): Promise<string | null
 export interface YtDlpCommand {
   bin: string;
   prefixArgs: string[];
+  supportsJsRuntimes?: boolean;
+  supportsRemoteComponents?: boolean;
+}
+
+const ALLOWED_COOKIE_BROWSERS = new Set([
+  'chrome',
+  'chromium',
+  'edge',
+  'firefox',
+  'brave',
+  'opera',
+  'vivaldi',
+  'safari',
+]);
+
+export function isValidCookiesBrowser(raw: string): boolean {
+  return ALLOWED_COOKIE_BROWSERS.has(raw.trim().toLowerCase());
 }
 
 let cachedYtDlpCmd: YtDlpCommand | null | undefined;
 
 /**
  * Resolves a working yt-dlp executable across Linux, macOS, and Windows
- * (supports yt-dlp in PATH as well as python/py/python3 -m yt_dlp).
+ * (supports yt-dlp in PATH as well as python/py/python3 -m yt_dlp) and probes
+ * whether it supports --js-runtimes / --remote-components (EJS solver for YouTube 1080p/4K).
  */
 export async function resolveYtDlpCommand(): Promise<YtDlpCommand | null> {
   if (cachedYtDlpCmd !== undefined) return cachedYtDlpCmd;
@@ -95,8 +113,24 @@ export async function resolveYtDlpCommand(): Promise<YtDlpCommand | null> {
   for (const cmd of candidates) {
     try {
       await execFileAsync(cmd.bin, [...cmd.prefixArgs, '--version'], { timeout: 4000 });
-      cachedYtDlpCmd = cmd;
-      return cmd;
+      let supportsJsRuntimes = false;
+      let supportsRemoteComponents = false;
+      try {
+        const { stdout: helpOut } = await execFileAsync(cmd.bin, [...cmd.prefixArgs, '--help'], {
+          maxBuffer: 4 * 1024 * 1024,
+          timeout: 5000,
+        });
+        supportsJsRuntimes = helpOut.includes('--js-runtimes');
+        supportsRemoteComponents = helpOut.includes('--remote-components');
+      } catch {
+        // Older yt-dlp without --js-runtimes/--remote-components
+      }
+      cachedYtDlpCmd = {
+        ...cmd,
+        supportsJsRuntimes,
+        supportsRemoteComponents,
+      };
+      return cachedYtDlpCmd;
     } catch {
       // Try next executable candidate
     }
@@ -118,6 +152,7 @@ async function execYtDlp(
 }
 
 async function buildYtDlpBaseArgs(jobDir?: string): Promise<string[]> {
+  const cmd = await resolveYtDlpCommand();
   const args = [
     '--force-ipv4',
     '--no-playlist',
@@ -130,9 +165,23 @@ async function buildYtDlpBaseArgs(jobDir?: string): Promise<string[]> {
     '2',
   ];
 
+  // Enable Node.js JS challenge solver (EJS) automatically when yt-dlp supports it so
+  // YouTube serves full 1080p/1440p/4K formats instead of returning HTTP 403 or 360p-only.
+  if (cmd?.supportsJsRuntimes) {
+    args.push('--js-runtimes', `node:${process.execPath}`);
+  }
+  if (cmd?.supportsRemoteComponents) {
+    args.push('--remote-components', 'ejs:github');
+  }
+
   const cookiesFile = await resolveCookiesFile(jobDir);
   if (cookiesFile) {
     args.push('--cookies', cookiesFile);
+  } else {
+    const browser = process.env.YTDLP_COOKIES_FROM_BROWSER?.trim().toLowerCase();
+    if (browser && isValidCookiesBrowser(browser)) {
+      args.push('--cookies-from-browser', browser);
+    }
   }
 
   const proxyUrl = process.env.YTDLP_PROXY?.trim() || config.ytdlpProxy;
@@ -185,6 +234,7 @@ export async function fetchVideoMetadata(
 }
 
 export const YTDLP_BEST_QUALITY_FORMAT = 'bestvideo+bestaudio/best';
+export const YTDLP_HD_QUALITY_FORMAT = 'bestvideo[height>=720]+bestaudio/best[height>=720]';
 export const YTDLP_QUALITY_SORT = 'res,fps,vbr,abr,ext:mp4:m4a';
 
 export const YTDLP_DOWNLOAD_STRATEGIES: ReadonlyArray<{
@@ -194,31 +244,39 @@ export const YTDLP_DOWNLOAD_STRATEGIES: ReadonlyArray<{
   sort: string;
 }> = [
   {
-    // 1. yt-dlp's own built-in latest default client stack & JS challenge solver
-    name: 'default',
+    // 1. yt-dlp native default + Node.js EJS solver, requiring HD (>=720p / 1080p / 4K) so it never silently settles for 360p
+    name: 'default-hd',
     extraArgs: [],
-    format: YTDLP_BEST_QUALITY_FORMAT,
+    format: YTDLP_HD_QUALITY_FORMAT,
     sort: YTDLP_QUALITY_SORT,
   },
   {
     // 2. Safari + TV HLS streams (1080p/4K HLS bypasses HTTPS adaptive GVS PO-token 403s)
-    name: 'web_safari-hls',
+    name: 'web_safari-hls-hd',
     extraArgs: ['--rm-cache-dir', '--extractor-args', 'youtube:player_client=web_safari,tv'],
-    format: 'bestvideo[protocol^=m3u8]+bestaudio[protocol^=m3u8]/bestvideo+bestaudio/best',
+    format:
+      'bestvideo[height>=720][protocol^=m3u8]+bestaudio[protocol^=m3u8]/bestvideo[height>=720]+bestaudio/best[height>=720]',
     sort: 'res,fps,vbr,abr',
   },
   {
     // 3. iOS + TV HLS streams (1080p/4K HLS fallback)
-    name: 'ios-hls',
+    name: 'ios-hls-hd',
     extraArgs: ['--extractor-args', 'youtube:player_client=ios,tv'],
     format:
-      'bestvideo[protocol^=m3u8]+bestaudio[protocol^=m3u8]/best[protocol^=m3u8]/bestvideo+bestaudio/best',
+      'bestvideo[height>=720][protocol^=m3u8]+bestaudio[protocol^=m3u8]/best[height>=720][protocol^=m3u8]/bestvideo[height>=720]+bestaudio',
     sort: 'res,fps,vbr,abr',
   },
   {
-    // 4. Embedded TV / mobile web / VR direct fallback
-    name: 'tv_embedded-fallback',
-    extraArgs: ['--extractor-args', 'youtube:player_client=tv_embedded,mweb,android_vr'],
+    // 4. Smart TV / embedded TV / Android VR HD streams
+    name: 'tv-vr-hd',
+    extraArgs: ['--extractor-args', 'youtube:player_client=tv,tv_embedded,android_vr'],
+    format: YTDLP_HD_QUALITY_FORMAT,
+    sort: 'res,fps,vbr,abr',
+  },
+  {
+    // 5. Final fallback only when the source video on YouTube itself is below 720p
+    name: 'best-any-fallback',
+    extraArgs: [],
     format: YTDLP_BEST_QUALITY_FORMAT,
     sort: 'res,fps,vbr,abr',
   },

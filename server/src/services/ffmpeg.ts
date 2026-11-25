@@ -177,7 +177,7 @@ export function buildVerticalFilterComplex(params: {
 }): string {
   const { width, height, videoLayout, subtitleFilter, videoFilter } = params;
   if (videoFilter) {
-    return `[0:v]${videoFilter},setsar=1${subtitleFilter}[vout]`;
+    return `[0:v]${videoFilter},unsharp=5:5:0.35:3:3:0.0,setsar=1${subtitleFilter}[vout]`;
   }
 
   const lanczosFlags = 'lanczos+accurate_rnd+full_chroma_int';
@@ -201,7 +201,7 @@ export function buildVerticalFilterComplex(params: {
 export function buildHighQualityEncodeArgs(videoBitrate = '8000k'): string[] {
   return [
     '-sws_flags',
-    'lanczos',
+    'lanczos+accurate_rnd+full_chroma_int',
     '-c:v',
     'libx264',
     '-profile:v',
