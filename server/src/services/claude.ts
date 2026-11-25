@@ -40,20 +40,23 @@ export async function findBestMomentsWithClaude(params: {
   const formattedTranscript = formatTranscriptForPrompt(transcript);
 
   const systemPrompt = [
-    'You are an expert short-form video editor specializing in YouTube Shorts, Instagram Reels, and Facebook Reels.',
+    'You are an elite viral short-form video editor specializing in YouTube Shorts, Instagram Reels, and Facebook Reels.',
     'Respond with STRICT JSON ONLY: a JSON array of objects, with no markdown fences, no commentary, and no extra keys.',
-    'Each object must have exactly these keys: "start" (number, seconds), "end" (number, seconds), "title" (string), "caption" (string with 2-3 relevant hashtags), and "score" (integer 0-100 representing virality potential).',
+    'Each object must have exactly these keys: "start" (number, seconds), "end" (number, seconds), "title" (punchy English viral hook title, max 65 chars), "caption" (engaging English social caption with 2-3 relevant hashtags), and "score" (integer 0-100 representing virality potential).',
+    'ALL titles, captions, and hashtags MUST be written in natural, fluent English even if the source video or transcript contains another language.',
   ].join(' ');
 
   const userPrompt = [
     `Video title: "${videoTitle}"`,
     `Total duration: ${videoDuration.toFixed(2)} seconds.`,
-    `Select the ${clipCount} best moments for vertical short-form clips.`,
-    'Rules:',
+    `Select the ${clipCount} most viral moments for vertical 9:16 short-form clips.`,
+    'Viral Hook & Editing Rules:',
     `- Each moment MUST be ${clipLength} seconds long (+/- 2 seconds, so between ${clipLength - 2} and ${clipLength + 2} seconds).`,
-    '- Every moment MUST start and end cleanly on natural sentence boundaries from the transcript.',
+    '- Every clip MUST open on an immediate scroll-stopping viral hook in the first 3 seconds (a bold claim, curiosity gap, contrarian insight, sharp question, shocking number, dramatic reveal, or emotional punchline).',
+    '- NEVER start a clip on generic greetings, channel intros, housekeeping, sponsor reads, applause, or weak filler ("Hey guys", "Welcome back", "In this video", "Subscribe", "Um/so basically").',
+    '- Every moment MUST start and end cleanly on complete sentence boundaries and deliver a self-contained payoff.',
     '- Moments MUST NOT overlap with each other.',
-    '- Prioritize strong opening hooks, surprising claims, emotional punchlines, and actionable key insights.',
+    '- Write ALL "title" and "caption" fields strictly in punchy English.',
     '- Return strictly a valid JSON array.',
     '',
     'Timestamped transcript:',

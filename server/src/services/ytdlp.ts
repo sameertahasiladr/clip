@@ -251,7 +251,7 @@ export async function tryFetchYouTubeCaptions(
         '--write-subs',
         '--write-auto-subs',
         '--sub-langs',
-        'en.*,en',
+        'en,en-orig,en-US,en-GB,en.*',
         '--sub-format',
         'vtt/srt/best',
         '-o',
@@ -263,10 +263,17 @@ export async function tryFetchYouTubeCaptions(
     );
 
     const files = await fs.readdir(jobDir);
-    const subtitleFile = files.find(
-      (name) => name.startsWith('captions.') && (name.endsWith('.vtt') || name.endsWith('.srt'))
-    );
+    const subtitleFiles = files
+      .filter(
+        (name) => name.startsWith('captions.') && (name.endsWith('.vtt') || name.endsWith('.srt'))
+      )
+      .sort((a, b) => {
+        const aNative = /^captions\.en(?:-orig|-US|-GB)?\./i.test(a) ? 0 : 1;
+        const bNative = /^captions\.en(?:-orig|-US|-GB)?\./i.test(b) ? 0 : 1;
+        return aNative - bNative;
+      });
 
+    const subtitleFile = subtitleFiles[0];
     if (!subtitleFile) {
       return null;
     }

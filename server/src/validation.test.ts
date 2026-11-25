@@ -13,12 +13,18 @@ import { InMemoryJobStore } from './queue/jobStore.js';
 import { InMemoryClipQueue } from './queue/jobQueue.js';
 import {
   buildYouTubeCookieHeaders,
+  ensureEnglishCaptionUrl,
   isTrustedGoogleVideoStreamUrl,
   parseDescriptionChapters,
   parseNetscapeCookies,
   parseTimedTextXml,
 } from './services/youtubeFetch.js';
-import { selectBestMomentsLocally, topUpMomentsToCount } from './services/momentSelector.js';
+import {
+  isLikelyNonEnglishTranscript,
+  scoreViralHookWindow,
+  selectBestMomentsLocally,
+  topUpMomentsToCount,
+} from './services/momentSelector.js';
 
 test('parseTimedTextXml extracts format-3 and legacy YouTube captions cleanly', () => {
   const xml = `<?xml version="1.0" encoding="utf-8" ?><timedtext format="3"><body><p t="18640" d="3240">We&#39;re no strangers to love</p><p t="22640" d="4320">You know the rules &amp; so do I</p></body></timedtext>`;
@@ -299,5 +305,101 @@ test('isValidProxyUrl accepts only http, https, and socks5 proxy schemes', () =>
   assert.equal(isValidProxyUrl('file:///etc/passwd'), false);
   assert.equal(isValidProxyUrl('not-a-url'), false);
 });
+
+test('buildAssSubtitles chunks and wraps long caption lines so they never clip horizontally', () => {
+  const ass = buildAssSubtitles(
+    [
+      { start: 0, end: 1, text: '[Music]' },
+      {
+        start: 1,
+        end: 7,
+        text: 'Alright so here we are in front of the elephants and the really cool thing about these guys is their long trunks',
+      },
+    ],
+    0,
+    10
+  );
+
+  const dialogueLines = ass.split('\n').filter((line) => line.startsWith('Dialogue:'));
+  // [Music]-only segment is stripped, long 21-word segment is split into multiple short cues
+  assert.ok(dialogueLines.length >= 3, `Expected >=3 short cues, got ${dialogueLines.length}`);
+  assert.ok(!ass.includes('[MUSIC]'));
+  for (const line of dialogueLines) {
+    const textPart = line.split(',,').slice(1).join(',,');
+    const visualLines = textPart.split('\\N');
+    assert.ok(visualLines.length <= 2, `Cue should wrap into at most 2 lines: ${textPart}`);
+    for (const visualLine of visualLines) {
+      assert.ok(visualLine.length <= 28, `Wrapped caption line too wide (${visualLine.length}): ${visualLine}`);
+    }
+  }
+});
+
+test('ensureEnglishCaptionUrl appends tlang=en for non-English tracks and preserves English tracks', () => {
+  const hindi = ensureEnglishCaptionUrl(
+    'https://www.youtube.com/api/timedtext?v=abc12345678&lang=hi',
+    'hi'
+  );
+  assert.ok(hindi);
+  assert.equal(new URL(hindi).searchParams.get('tlang'), 'en');
+
+  const english = ensureEnglishCaptionUrl(
+    'https://www.youtube.com/api/timedtext?v=abc12345678&lang=en',
+    'en'
+  );
+  assert.ok(english);
+  assert.equal(new URL(english).searchParams.get('tlang'), null);
+
+  assert.equal(ensureEnglishCaptionUrl('https://evil.example.com/timedtext?lang=hi', 'hi'), null);
+});
+
+test('isLikelyNonEnglishTranscript detects non-Latin scripts vs English accurately', () => {
+  assert.equal(
+    isLikelyNonEnglishTranscript([
+      { start: 0, end: 4, text: 'नमस्ते दोस्तों आज हम एक बड़ा राज़ जानेंगे' },
+    ]),
+    true
+  );
+  assert.equal(
+    isLikelyNonEnglishTranscript([
+      { start: 0, end: 4, text: "Here's why 90% of creators miss this viral hook." },
+    ]),
+    false
+  );
+});
+
+test('viral hook scorer ranks a strong hook above generic channel intros and picks the hook first', () => {
+  const introScore = scoreViralHookWindow(
+    "Hey guys welcome back to my channel, don't forget to subscribe!",
+    "Hey guys welcome back to my channel, don't forget to subscribe and hit the bell before we start."
+  );
+  const hookScore = scoreViralHookWindow(
+    "Stop doing this one mistake — here's why 90% of creators fail!",
+    "Stop doing this one mistake — here's why 90% of creators fail in their first 3 seconds and how to fix it."
+  );
+  assert.ok(hookScore > introScore + 15, `Expected hook (${hookScore}) >> intro (${introScore})`);
+
+  const transcript = [
+    { start: 0, end: 5, text: 'Hey guys welcome back to my channel.' },
+    { start: 5, end: 10, text: "In this video don't forget to subscribe and like." },
+    { start: 10, end: 15, text: 'Before we get started check out the link in the description.' },
+    { start: 20, end: 25, text: "Stop doing this one mistake — here's why 90% of creators fail!" },
+    { start: 25, end: 30, text: 'Nobody talks about the secret retention trick in the first 3 seconds.' },
+    { start: 30, end: 35, text: 'Once you switch your opening line, watch time doubles overnight.' },
+  ];
+
+  const picked = selectBestMomentsLocally({
+    transcript,
+    chapters: [],
+    clipLength: 15,
+    clipCount: 1,
+    videoDuration: 40,
+    videoTitle: 'Creator Masterclass',
+    author: 'Studio Lab',
+  });
+
+  assert.equal(picked.length, 1);
+  assert.equal(picked[0].start, 20, 'Should pick the viral hook at 20s instead of the 0s channel intro');
+});
+
 
 

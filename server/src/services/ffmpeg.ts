@@ -23,8 +23,100 @@ function escapeAssText(text: string): string {
     .replace(/\r?\n/g, '\\N');
 }
 
+function sanitizeCaptionText(raw: string): string {
+  return raw
+    .replace(/\[[^\]]+\]/g, ' ')
+    .replace(/\([^)]*music[^)]*\)/gi, ' ')
+    .replace(/[♪♫]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /**
- * Generates an ASS subtitle file with bold lower-third captions calibrated for 1080x1920 vertical video.
+ * Wraps a short caption chunk into at most two balanced lines (<= maxLineChars per line)
+ * so bold lower-third captions stay comfortably inside the 1080px vertical safe zone.
+ */
+function wrapCaptionLines(text: string, maxLineChars = 20): string {
+  const upper = text.toUpperCase();
+  if (upper.length <= maxLineChars) return upper;
+
+  const words = upper.split(/\s+/);
+  if (words.length <= 1) return upper;
+
+  // Find the split point that balances line lengths closest to the middle
+  let bestSplit = 1;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (let i = 1; i < words.length; i++) {
+    const line1 = words.slice(0, i).join(' ');
+    const line2 = words.slice(i).join(' ');
+    const overflow =
+      Math.max(0, line1.length - maxLineChars) + Math.max(0, line2.length - maxLineChars);
+    const imbalance = Math.abs(line1.length - line2.length);
+    const score = overflow * 10 + imbalance;
+    if (score < bestScore) {
+      bestScore = score;
+      bestSplit = i;
+    }
+  }
+
+  return `${words.slice(0, bestSplit).join(' ')}\n${words.slice(bestSplit).join(' ')}`;
+}
+
+/**
+ * Splits a long transcript segment into fast-paced short-form caption cues (max 6 words / ~34 chars)
+ * distributed proportionally across the segment's timestamp range.
+ */
+function chunkSegmentForCaptions(
+  text: string,
+  relStart: number,
+  relEnd: number,
+  maxWordsPerCue = 6,
+  maxCharsPerCue = 34
+): Array<{ start: number; end: number; text: string }> {
+  const cleaned = sanitizeCaptionText(text);
+  if (!cleaned) return [];
+
+  const words = cleaned.split(/\s+/);
+  const chunks: string[] = [];
+  let current: string[] = [];
+
+  for (const word of words) {
+    const candidate = [...current, word].join(' ');
+    if (
+      current.length > 0 &&
+      (current.length >= maxWordsPerCue || candidate.length > maxCharsPerCue)
+    ) {
+      chunks.push(current.join(' '));
+      current = [word];
+    } else {
+      current.push(word);
+    }
+  }
+  if (current.length > 0) {
+    chunks.push(current.join(' '));
+  }
+
+  const totalDuration = relEnd - relStart;
+  const totalWords = words.length || 1;
+  let cursor = relStart;
+
+  return chunks.map((chunk, idx) => {
+    const chunkWords = chunk.split(/\s+/).length;
+    const isLast = idx === chunks.length - 1;
+    const end = isLast ? relEnd : Math.min(relEnd, cursor + totalDuration * (chunkWords / totalWords));
+    const cue = {
+      start: cursor,
+      end: Math.max(cursor + 0.15, end),
+      text: wrapCaptionLines(chunk),
+    };
+    cursor = cue.end;
+    return cue;
+  });
+}
+
+/**
+ * Generates an ASS subtitle file with bold, non-clipping lower-third captions calibrated for 1080x1920 vertical video.
  */
 export function buildAssSubtitles(
   segments: TranscriptSegment[],
@@ -41,7 +133,7 @@ export function buildAssSubtitles(
     '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    'Style: LowerThird,DejaVu Sans,68,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,2,72,72,260,1',
+    'Style: LowerThird,DejaVu Sans,56,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,80,80,250,1',
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
@@ -55,9 +147,12 @@ export function buildAssSubtitles(
     const relEnd = Math.min(clipEnd - clipStart, seg.end - clipStart);
     if (relEnd <= relStart) continue;
 
-    dialogues.push(
-      `Dialogue: 0,${formatAssTime(relStart)},${formatAssTime(relEnd)},LowerThird,,0,0,0,,${escapeAssText(seg.text.toUpperCase())}`
-    );
+    const cues = chunkSegmentForCaptions(seg.text, relStart, relEnd);
+    for (const cue of cues) {
+      dialogues.push(
+        `Dialogue: 0,${formatAssTime(cue.start)},${formatAssTime(cue.end)},LowerThird,,0,0,0,,${escapeAssText(cue.text)}`
+      );
+    }
   }
 
   return [...header, ...dialogues, ''].join('\n');
@@ -69,9 +164,9 @@ export interface RenderedClipArtifacts {
 }
 
 /**
- * Cuts a single moment from a local source video OR direct YouTube stream URL, converts to 9:16
- * vertical MP4 with a blurred background fill and centered original frame, optionally burns in
- * bold lower-third captions, and exports H.264 + AAC MP4 plus a JPEG poster frame.
+ * Cuts a single moment from a local source video OR direct YouTube stream URL, converts it to a
+ * true full-bleed vertical 9:16 MP4 (1080x1920, square pixels), optionally burns in bold wrapped
+ * lower-third English captions, and exports H.264 + AAC MP4 plus a JPEG poster frame.
  */
 export async function renderVerticalClip(params: {
   sourceInput: string;
@@ -118,20 +213,18 @@ export async function renderVerticalClip(params: {
   let subtitleFilter = '';
   if (captions && relevantTranscript.length > 0) {
     const assContent = buildAssSubtitles(relevantTranscript, moment.start, moment.end);
-    const subtitlePath = path.resolve(jobDir, subtitleFilename);
-    if (!subtitlePath.startsWith(resolvedBase + path.sep)) {
-      throw new Error('Invalid subtitle path.');
+    if (assContent.includes('Dialogue:')) {
+      const subtitlePath = path.resolve(jobDir, subtitleFilename);
+      if (!subtitlePath.startsWith(resolvedBase + path.sep)) {
+        throw new Error('Invalid subtitle path.');
+      }
+      await fs.writeFile(subtitlePath, assContent, 'utf8');
+      subtitleFilter = `,ass=${subtitleFilename}`;
     }
-    await fs.writeFile(subtitlePath, assContent, 'utf8');
-    subtitleFilter = `,ass=${subtitleFilename}`;
   }
 
-  // Blurred vertical background fill + centered original video
-  const filterComplex = [
-    `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},boxblur=20:3[bg]`,
-    `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease[fg]`,
-    `[bg][fg]overlay=(W-w)/2:(H-h)/2${subtitleFilter}[vout]`,
-  ].join(';');
+  // True full-bleed vertical 9:16 center-crop with locked 1:1 square pixel aspect ratio
+  const filterComplex = `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1${subtitleFilter}[vout]`;
 
   const inputArgs: string[] = ['-y', '-loglevel', 'error'];
   if (userAgent && /^https:\/\//i.test(sourceInput)) {
@@ -162,6 +255,8 @@ export async function renderVerticalClip(params: {
       '23',
       '-pix_fmt',
       'yuv420p',
+      '-aspect',
+      '9:16',
       '-c:a',
       'aac',
       '-b:a',
