@@ -8,7 +8,7 @@ import {
   validateSelectedMoments,
 } from './validation.js';
 import { isValidProxyUrl, parseSubtitlesToSegments } from './services/ytdlp.js';
-import { buildAssSubtitles } from './services/ffmpeg.js';
+import { buildAssSubtitles, buildVerticalFilterComplex } from './services/ffmpeg.js';
 import { InMemoryJobStore } from './queue/jobStore.js';
 import { InMemoryClipQueue } from './queue/jobQueue.js';
 import {
@@ -98,18 +98,20 @@ test('parseCanonicalYouTubeUrl canonicalizes valid URLs and rejects SSRF targets
   assert.equal(parseCanonicalYouTubeUrl('https://evil-youtube.com/watch?v=dQw4w9WgXcQ').valid, false);
 });
 
-test('validateCreateJobRequest validates clipLength, clipCount, captions, and URL', () => {
+test('validateCreateJobRequest validates clipLength, clipCount (1-20), captions, videoLayout, and URL', () => {
   const valid = validateCreateJobRequest({
     url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
     clipLength: 15,
-    clipCount: 4,
+    clipCount: 10,
     captions: false,
+    videoLayout: 'vertical-blur',
   });
   assert.equal(valid.success, true);
   if (valid.success) {
     assert.equal(valid.data.clipLength, 15);
-    assert.equal(valid.data.clipCount, 4);
+    assert.equal(valid.data.clipCount, 10);
     assert.equal(valid.data.captions, false);
+    assert.equal(valid.data.videoLayout, 'vertical-blur');
   }
 
   const badLength = validateCreateJobRequest({
@@ -123,7 +125,7 @@ test('validateCreateJobRequest validates clipLength, clipCount, captions, and UR
   const badCount = validateCreateJobRequest({
     url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
     clipLength: 30,
-    clipCount: 8,
+    clipCount: 25,
     captions: true,
   });
   assert.equal(badCount.success, false);
@@ -400,6 +402,29 @@ test('viral hook scorer ranks a strong hook above generic channel intros and pic
   assert.equal(picked.length, 1);
   assert.equal(picked[0].start, 20, 'Should pick the viral hook at 20s instead of the 0s channel intro');
 });
+
+test('buildVerticalFilterComplex supports both full vertical crop and horizontal-in-9:16 blurred fill', () => {
+  const fillFilter = buildVerticalFilterComplex({
+    width: 1080,
+    height: 1920,
+    videoLayout: 'vertical-fill',
+    subtitleFilter: ',ass=clip-1.ass',
+  });
+  assert.ok(fillFilter.includes('scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1'));
+  assert.ok(!fillFilter.includes('boxblur'));
+  assert.ok(fillFilter.includes(',ass=clip-1.ass'));
+
+  const blurFilter = buildVerticalFilterComplex({
+    width: 1080,
+    height: 1920,
+    videoLayout: 'vertical-blur',
+    subtitleFilter: ',ass=clip-1.ass',
+  });
+  assert.ok(blurFilter.includes('boxblur=20:3[bg]'));
+  assert.ok(blurFilter.includes('force_original_aspect_ratio=decrease[fg]'));
+  assert.ok(blurFilter.includes('[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,ass=clip-1.ass[vout]'));
+});
+
 
 
 

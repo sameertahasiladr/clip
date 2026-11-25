@@ -1,5 +1,7 @@
 export type ClipLength = 15 | 30;
 
+export type VideoLayout = 'vertical-fill' | 'vertical-blur';
+
 export type JobStatus = 'queued' | 'processing' | 'done' | 'failed';
 
 export type JobStep =
@@ -14,6 +16,7 @@ export interface CreateJobInput {
   clipLength: ClipLength;
   clipCount: number;
   captions: boolean;
+  videoLayout?: VideoLayout;
   uploadedFilePath?: string;
   sourceTitle?: string;
 }
@@ -46,6 +49,7 @@ export interface JobRecord {
   clipLength: ClipLength;
   clipCount: number;
   captions: boolean;
+  videoLayout: VideoLayout;
   uploadedFilePath?: string;
   sourceTitle?: string;
   status: JobStatus;

@@ -14,7 +14,7 @@ import type { JobStore } from './queue/jobStore.js';
 import type { ClipLength } from './types.js';
 import { isValidJobId, sanitizeDownloadSlug, validateCreateJobRequest } from './validation.js';
 
-const SAFE_CLIP_FILENAME_REGEX = /^clip-[1-5]\.(mp4|jpg)$/;
+const SAFE_CLIP_FILENAME_REGEX = /^clip-(?:[1-9]|1\d|20)\.(mp4|jpg)$/;
 
 export function createApiRouter(deps: { store: JobStore; queue: ClipJobQueue }): express.Router {
   const { store, queue } = deps;
@@ -41,6 +41,7 @@ export function createApiRouter(deps: { store: JobStore; queue: ClipJobQueue }):
         clipLength: validated.data.clipLength,
         clipCount: validated.data.clipCount,
         captions: validated.data.captions,
+        videoLayout: validated.data.videoLayout ?? 'vertical-fill',
         queueMode: queue.mode,
       });
 
@@ -70,9 +71,11 @@ export function createApiRouter(deps: { store: JobStore; queue: ClipJobQueue }):
 
         const rawCount = Number(req.query.clipCount);
         const clipCount =
-          Number.isInteger(rawCount) && rawCount >= 1 && rawCount <= 5 ? rawCount : 3;
+          Number.isInteger(rawCount) && rawCount >= 1 && rawCount <= 20 ? rawCount : 3;
 
         const captions = req.query.captions !== 'false';
+        const videoLayout =
+          req.query.videoLayout === 'vertical-blur' ? 'vertical-blur' : 'vertical-fill';
         const rawFilename = typeof req.query.filename === 'string' ? req.query.filename : 'Uploaded Video';
         const cleanTitle = rawFilename.replace(/\.[^.]+$/, '').replace(/[^\w\s-]/g, ' ').trim().slice(0, 80) || 'Uploaded Video';
 
@@ -95,6 +98,7 @@ export function createApiRouter(deps: { store: JobStore; queue: ClipJobQueue }):
           clipLength,
           clipCount,
           captions,
+          videoLayout,
           uploadedFilePath: uploadPath,
           sourceTitle: cleanTitle,
         });

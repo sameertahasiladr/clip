@@ -1,5 +1,7 @@
 export type ClipLength = 15 | 30;
 
+export type VideoLayout = 'vertical-fill' | 'vertical-blur';
+
 export type JobStatus = 'queued' | 'processing' | 'done' | 'failed';
 
 export type JobStep =
@@ -22,6 +24,7 @@ export interface CreateJobPayload {
   clipLength: ClipLength;
   clipCount: number;
   captions: boolean;
+  videoLayout: VideoLayout;
 }
 
 export interface CreateJobResponse {

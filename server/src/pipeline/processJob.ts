@@ -311,6 +311,7 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
         moment,
         transcript,
         captions: job.captions,
+        videoLayout: job.videoLayout,
         resolution: '1080x1920',
       });
 

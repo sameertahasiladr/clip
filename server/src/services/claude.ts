@@ -72,7 +72,7 @@ export async function findBestMomentsWithClaude(params: {
     },
     body: JSON.stringify({
       model: config.claudeModel,
-      max_tokens: 2048,
+      max_tokens: 4096,
       temperature: 0.2,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],

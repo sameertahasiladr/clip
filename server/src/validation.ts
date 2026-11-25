@@ -74,11 +74,14 @@ export function parseCanonicalYouTubeUrl(rawUrl: string): {
   };
 }
 
+export const MAX_CLIP_COUNT = 20;
+
 export const createJobBodySchema = z.object({
   url: z.string().min(1, 'URL is required').max(500, 'URL is too long'),
   clipLength: z.union([z.literal(15), z.literal(30)]).default(30),
-  clipCount: z.number().int().min(1).max(5).default(3),
+  clipCount: z.number().int().min(1).max(MAX_CLIP_COUNT).default(3),
   captions: z.boolean().default(true),
+  videoLayout: z.enum(['vertical-fill', 'vertical-blur']).default('vertical-fill'),
 });
 
 export function validateCreateJobRequest(body: unknown): {
@@ -114,6 +117,7 @@ export function validateCreateJobRequest(body: unknown): {
       clipLength: parsed.data.clipLength,
       clipCount: parsed.data.clipCount,
       captions: parsed.data.captions,
+      videoLayout: parsed.data.videoLayout,
     },
   };
 }

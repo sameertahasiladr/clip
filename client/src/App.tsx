@@ -7,7 +7,7 @@ import { Header } from './components/Header';
 import { HeroForm } from './components/HeroForm';
 import { ProcessingStepper } from './components/ProcessingStepper';
 import { ResultsGrid } from './components/ResultsGrid';
-import type { ClipItem, ClipLength, JobStep } from './types';
+import type { ClipItem, ClipLength, JobStep, VideoLayout } from './types';
 import { validateYouTubeUrl } from './utils/youtube';
 
 const POLL_INTERVAL_MS = 3000;
@@ -20,6 +20,7 @@ export default function App() {
   const [clipLength, setClipLength] = useState<ClipLength>(30);
   const [clipCount, setClipCount] = useState<number>(3);
   const [captions, setCaptions] = useState<boolean>(true);
+  const [videoLayout, setVideoLayout] = useState<VideoLayout>('vertical-fill');
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const [viewState, setViewState] = useState<ViewState>('idle');
@@ -125,11 +126,13 @@ export default function App() {
     setIsSubmitting(true);
 
     try {
+      const safeClipCount = Math.min(20, Math.max(1, Math.round(clipCount)));
       const { jobId } = await createJob({
         url: validation.canonicalUrl,
         clipLength,
-        clipCount,
+        clipCount: safeClipCount,
         captions,
+        videoLayout,
       });
 
       setSubmittedUrl(validation.canonicalUrl);
@@ -166,12 +169,14 @@ export default function App() {
               clipLength={clipLength}
               clipCount={clipCount}
               captions={captions}
+              videoLayout={videoLayout}
               validationError={validationError}
               isSubmitting={isSubmitting}
               onUrlChange={handleUrlChange}
               onClipLengthChange={setClipLength}
               onClipCountChange={setClipCount}
               onCaptionsChange={setCaptions}
+              onVideoLayoutChange={setVideoLayout}
               onSubmit={handleSubmit}
             />
             <EmptyPreview />

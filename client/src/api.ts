@@ -4,6 +4,7 @@ import type {
   CreateJobResponse,
   JobResponse,
   JobStep,
+  VideoLayout,
 } from './types';
 import { validateYouTubeUrl } from './utils/youtube';
 
@@ -135,8 +136,9 @@ export function buildMockClips(
   clipCount: number,
   captions: boolean
 ): ClipItem[] {
-  const safeCount = Math.min(Math.max(clipCount, 1), SAMPLE_CLIPS_CATALOG.length);
-  return SAMPLE_CLIPS_CATALOG.slice(0, safeCount).map((template, index) => {
+  const safeCount = Math.min(Math.max(clipCount, 1), 20);
+  return Array.from({ length: safeCount }, (_, index) => {
+    const template = SAMPLE_CLIPS_CATALOG[index % SAMPLE_CLIPS_CATALOG.length];
     const offset = index === 0 ? 0 : index % 2 === 0 ? -1 : 1;
     const duration = Math.max(13, Math.min(32, clipLength + offset));
     return {
@@ -253,9 +255,11 @@ export interface CreateUploadJobPayload {
   clipLength: 15 | 30;
   clipCount: number;
   captions: boolean;
+  videoLayout?: VideoLayout;
 }
 
 export async function createUploadJob(payload: CreateUploadJobPayload): Promise<CreateJobResponse> {
+  const videoLayout = payload.videoLayout ?? 'vertical-fill';
   if (isMockMode()) {
     const jobId = generateLocalJobId();
     mockJobs.set(jobId, {
@@ -265,6 +269,7 @@ export async function createUploadJob(payload: CreateUploadJobPayload): Promise<
         clipLength: payload.clipLength,
         clipCount: payload.clipCount,
         captions: payload.captions,
+        videoLayout,
       },
       videoId: 'uploaddemo0',
       pollCount: 0,
@@ -278,6 +283,7 @@ export async function createUploadJob(payload: CreateUploadJobPayload): Promise<
     clipLength: String(payload.clipLength),
     clipCount: String(payload.clipCount),
     captions: String(payload.captions),
+    videoLayout,
     filename: payload.file.name,
   });
 

@@ -23,6 +23,7 @@ export class InMemoryJobStore implements JobStore {
       clipLength: input.clipLength,
       clipCount: input.clipCount,
       captions: input.captions,
+      videoLayout: input.videoLayout ?? 'vertical-fill',
       uploadedFilePath: input.uploadedFilePath,
       sourceTitle: input.sourceTitle,
       status: 'queued',

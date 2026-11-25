@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { MomentSelection, TranscriptSegment } from '../types.js';
+import type { MomentSelection, TranscriptSegment, VideoLayout } from '../types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -164,9 +164,33 @@ export interface RenderedClipArtifacts {
 }
 
 /**
- * Cuts a single moment from a local source video OR direct YouTube stream URL, converts it to a
- * true full-bleed vertical 9:16 MP4 (1080x1920, square pixels), optionally burns in bold wrapped
- * lower-third English captions, and exports H.264 + AAC MP4 plus a JPEG poster frame.
+ * Builds the FFmpeg filter_complex string for either:
+ * - 'vertical-fill': true full-bleed 9:16 vertical center-crop filling 100% of the frame
+ * - 'vertical-blur': original horizontal video centered inside a 9:16 vertical frame with blurred background fill
+ */
+export function buildVerticalFilterComplex(params: {
+  width: number;
+  height: number;
+  videoLayout: VideoLayout;
+  subtitleFilter: string;
+}): string {
+  const { width, height, videoLayout, subtitleFilter } = params;
+  if (videoLayout === 'vertical-blur') {
+    return [
+      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},boxblur=20:3[bg]`,
+      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease[fg]`,
+      `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1${subtitleFilter}[vout]`,
+    ].join(';');
+  }
+
+  return `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1${subtitleFilter}[vout]`;
+}
+
+/**
+ * Cuts a single moment from a local source video OR direct YouTube stream URL, converts it to
+ * 1080x1920 vertical 9:16 MP4 (either full-bleed vertical fill or centered horizontal with
+ * blurred background), optionally burns in bold wrapped lower-third English captions, and
+ * exports H.264 + AAC MP4 plus a JPEG poster frame.
  */
 export async function renderVerticalClip(params: {
   sourceInput: string;
@@ -176,6 +200,7 @@ export async function renderVerticalClip(params: {
   moment: MomentSelection;
   transcript: TranscriptSegment[];
   captions: boolean;
+  videoLayout?: VideoLayout;
   resolution?: '720x1280' | '1080x1920';
 }): Promise<RenderedClipArtifacts> {
   const {
@@ -186,6 +211,7 @@ export async function renderVerticalClip(params: {
     moment,
     transcript,
     captions,
+    videoLayout = 'vertical-fill',
     resolution = '1080x1920',
   } = params;
 
@@ -223,8 +249,12 @@ export async function renderVerticalClip(params: {
     }
   }
 
-  // True full-bleed vertical 9:16 center-crop with locked 1:1 square pixel aspect ratio
-  const filterComplex = `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1${subtitleFilter}[vout]`;
+  const filterComplex = buildVerticalFilterComplex({
+    width,
+    height,
+    videoLayout,
+    subtitleFilter,
+  });
 
   const inputArgs: string[] = ['-y', '-loglevel', 'error'];
   if (userAgent && /^https:\/\//i.test(sourceInput)) {
