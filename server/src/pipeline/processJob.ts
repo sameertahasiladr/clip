@@ -187,25 +187,46 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
       }
     }
 
-    if (!downloadedVideoPath && videoInfo.streamUrl) {
-      try {
-        downloadedVideoPath = await downloadYouTubeStreamsToFile({
-          videoStreamUrl: videoInfo.streamUrl,
-          audioStreamUrl: videoInfo.audioStreamUrl,
-          userAgent: videoInfo.streamUserAgent,
-          cookieHeader: videoInfo.cookieHeader,
-          jobDir,
-        });
-        logger.info('Downloaded YouTube video via direct stream into server temp folder', {
-          jobId,
-          videoId,
-        });
-      } catch (err) {
-        logger.warn('Direct stream download to server failed', {
-          jobId,
-          videoId,
-          reason: err instanceof Error ? err.message : 'unknown',
-        });
+    if (!downloadedVideoPath && (videoInfo.streamCandidates.length > 0 || videoInfo.streamUrl)) {
+      const candidates =
+        videoInfo.streamCandidates.length > 0
+          ? videoInfo.streamCandidates
+          : [
+              {
+                videoUrl: videoInfo.streamUrl!,
+                audioUrl: videoInfo.audioStreamUrl,
+                height: 0,
+                userAgent: videoInfo.streamUserAgent,
+                clientName: 'DIRECT',
+              },
+            ];
+
+      for (const candidate of candidates) {
+        try {
+          downloadedVideoPath = await downloadYouTubeStreamsToFile({
+            videoStreamUrl: candidate.videoUrl,
+            audioStreamUrl: candidate.audioUrl,
+            userAgent: candidate.userAgent,
+            cookieHeader: videoInfo.cookieHeader,
+            jobDir,
+          });
+          logger.info('Downloaded YouTube video via direct stream into server temp folder', {
+            jobId,
+            videoId,
+            client: candidate.clientName,
+            height: candidate.height,
+            adaptiveMux: Boolean(candidate.audioUrl),
+          });
+          break;
+        } catch (err) {
+          logger.warn('Direct stream candidate download failed; trying next quality fallback', {
+            jobId,
+            videoId,
+            client: candidate.clientName,
+            height: candidate.height,
+            reason: err instanceof Error ? err.message : 'unknown',
+          });
+        }
       }
     }
 

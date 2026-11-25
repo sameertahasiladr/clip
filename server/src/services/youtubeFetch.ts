@@ -24,6 +24,14 @@ export interface YouTubeChapter {
   title: string;
 }
 
+export interface StreamCandidate {
+  videoUrl: string;
+  audioUrl: string | null;
+  height: number;
+  userAgent: string;
+  clientName: string;
+}
+
 export interface YouTubeVideoInfo {
   videoId: string;
   canonicalUrl: string;
@@ -36,6 +44,7 @@ export interface YouTubeVideoInfo {
   streamUrl: string | null;
   audioStreamUrl: string | null;
   streamUserAgent: string;
+  streamCandidates: StreamCandidate[];
   cookieHeader?: string;
   botCheckBlocked: boolean;
   transcript: TranscriptSegment[];
@@ -313,13 +322,23 @@ interface InnertubePlayerData {
   };
 }
 
-export function extractBestStreams(streamingData?: InnertubePlayerData['streamingData']): {
-  videoUrl: string | null;
+export interface ExtractedStreamPair {
+  videoUrl: string;
   audioUrl: string | null;
-} {
-  if (!streamingData) return { videoUrl: null, audioUrl: null };
+  height: number;
+}
 
-  // 1. Always inspect adaptiveFormats first to capture highest resolution (4K/1440p/1080p60) + highest bitrate audio
+/**
+ * Returns a deduplicated, quality-ordered list of stream candidates from highest resolution
+ * adaptive (4K/1440p/1080p60) -> highest H.264/M4A adaptive -> highest muxed MP4 fallback,
+ * so if YouTube returns HTTP 403 on a PO-token-gated adaptive stream we fall back cleanly
+ * to the highest working stream without failing the job.
+ */
+export function extractStreamCandidates(
+  streamingData?: InnertubePlayerData['streamingData']
+): ExtractedStreamPair[] {
+  if (!streamingData) return [];
+
   const adaptiveVideos = (streamingData.adaptiveFormats ?? [])
     .filter(
       (f) =>
@@ -351,6 +370,9 @@ export function extractBestStreams(streamingData?: InnertubePlayerData['streamin
     )
     .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
 
+  const bestM4aAudio = adaptiveAudios.find((a) => a.mimeType?.startsWith('audio/mp4'));
+  const bestAnyAudio = adaptiveAudios[0];
+
   const muxedStreams = (streamingData.formats ?? [])
     .filter(
       (f) =>
@@ -365,24 +387,69 @@ export function extractBestStreams(streamingData?: InnertubePlayerData['streamin
       return (b.bitrate ?? 0) - (a.bitrate ?? 0);
     });
 
-  const bestAdaptiveVideo = adaptiveVideos[0];
-  const bestAdaptiveAudio = adaptiveAudios[0];
-  const bestMuxed = muxedStreams[0];
+  const candidates: ExtractedStreamPair[] = [];
+  const seenKeys = new Set<string>();
+  const pushUnique = (pair: ExtractedStreamPair) => {
+    const key = `${pair.videoUrl}|${pair.audioUrl ?? ''}`;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      candidates.push(pair);
+    }
+  };
 
-  // Use adaptive highest-quality stream whenever available and at least as sharp as muxed
-  if (
-    bestAdaptiveVideo?.url &&
-    bestAdaptiveAudio?.url &&
-    (bestAdaptiveVideo.height ?? 0) >= (bestMuxed?.height ?? 0)
-  ) {
-    return { videoUrl: bestAdaptiveVideo.url, audioUrl: bestAdaptiveAudio.url };
+  // 1. Absolute highest resolution/fps/bitrate adaptive stream + highest bitrate audio
+  if (adaptiveVideos[0]?.url && bestAnyAudio?.url) {
+    pushUnique({
+      videoUrl: adaptiveVideos[0].url,
+      audioUrl: bestAnyAudio.url,
+      height: adaptiveVideos[0].height ?? 0,
+    });
   }
 
-  if (bestMuxed?.url) {
-    return { videoUrl: bestMuxed.url, audioUrl: null };
+  // 2. Highest resolution MP4 adaptive video + M4A audio (often avoids WebM/Opus 403 or codec issues)
+  const bestMp4Video = adaptiveVideos.find((v) => v.mimeType?.startsWith('video/mp4'));
+  if (bestMp4Video?.url && (bestM4aAudio?.url || bestAnyAudio?.url)) {
+    pushUnique({
+      videoUrl: bestMp4Video.url,
+      audioUrl: (bestM4aAudio ?? bestAnyAudio)!.url!,
+      height: bestMp4Video.height ?? 0,
+    });
   }
 
-  return { videoUrl: null, audioUrl: null };
+  // 3. 1080p MP4 adaptive fallback if top stream was 4K/1440p
+  const hd1080Video = adaptiveVideos.find(
+    (v) => (v.height ?? 0) <= 1080 && (v.height ?? 0) >= 720
+  );
+  if (hd1080Video?.url && (bestM4aAudio?.url || bestAnyAudio?.url)) {
+    pushUnique({
+      videoUrl: hd1080Video.url,
+      audioUrl: (bestM4aAudio ?? bestAnyAudio)!.url!,
+      height: hd1080Video.height ?? 0,
+    });
+  }
+
+  // 4. Highest resolution muxed stream (rarely blocked by adaptive PO-token 403s)
+  for (const muxed of muxedStreams.slice(0, 2)) {
+    if (muxed.url) {
+      pushUnique({
+        videoUrl: muxed.url,
+        audioUrl: null,
+        height: muxed.height ?? 360,
+      });
+    }
+  }
+
+  return candidates.sort((a, b) => b.height - a.height);
+}
+
+export function extractBestStreams(streamingData?: InnertubePlayerData['streamingData']): {
+  videoUrl: string | null;
+  audioUrl: string | null;
+} {
+  const best = extractStreamCandidates(streamingData)[0];
+  return best
+    ? { videoUrl: best.videoUrl, audioUrl: best.audioUrl }
+    : { videoUrl: null, audioUrl: null };
 }
 
 /**
@@ -553,16 +620,82 @@ export async function fetchYouTubeVideoInfo(
   let streamUrl: string | null = null;
   let audioStreamUrl: string | null = null;
   let streamUserAgent = ANDROID_INNERTUBE_UA;
+  const collectedCandidates: StreamCandidate[] = [];
   let transcript: TranscriptSegment[] = [];
   let botCheckBlocked = webPlayability.status === 'LOGIN_REQUIRED';
 
-  // If authenticated watch page itself already contains direct streamingData, grab it
+  const proxyUrl = getConfiguredProxy();
+
+  // Fast 1-byte Range probe to confirm a googlevideo.com stream returns 200/206 (not HTTP 403 PO-token block)
+  const probeUrlPlayable = async (url: string, userAgent: string): Promise<boolean> => {
+    if (!isTrustedGoogleVideoStreamUrl(url)) return false;
+    try {
+      if (proxyUrl) {
+        const { stdout } = await execFileAsync(
+          'curl',
+          [
+            '-sS',
+            '-4',
+            '-o',
+            '/dev/null',
+            '-w',
+            '%{http_code}',
+            '--max-time',
+            '8',
+            '--proxy',
+            proxyUrl,
+            '-A',
+            userAgent,
+            '-H',
+            'Range: bytes=0-0',
+            ...(authCookies?.cookieHeader ? ['-H', `Cookie: ${authCookies.cookieHeader}`] : []),
+            '--',
+            url,
+          ],
+          { timeout: 10_000 }
+        );
+        const code = Number(stdout.trim());
+        return code === 200 || code === 206;
+      }
+
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'User-Agent': userAgent,
+          Range: 'bytes=0-0',
+          ...(authCookies?.cookieHeader ? { Cookie: authCookies.cookieHeader } : {}),
+        },
+        signal: AbortSignal.timeout(6_000),
+      });
+      // Immediately cancel body after receiving response status
+      try {
+        await res.body?.cancel();
+      } catch {
+        // Ignore stream cancel errors
+      }
+      return res.status === 200 || res.status === 206;
+    } catch {
+      return false;
+    }
+  };
+
+  const probeCandidatePlayable = async (candidate: StreamCandidate): Promise<boolean> => {
+    const videoOk = await probeUrlPlayable(candidate.videoUrl, candidate.userAgent);
+    if (!videoOk) return false;
+    if (candidate.audioUrl) {
+      return probeUrlPlayable(candidate.audioUrl, candidate.userAgent);
+    }
+    return true;
+  };
+
+  // If authenticated watch page itself already contains direct streamingData, add its candidates
   if (webPlayability.status === 'OK' && webPlayer?.streamingData) {
-    const extracted = extractBestStreams(webPlayer.streamingData);
-    if (extracted.videoUrl) {
-      streamUrl = extracted.videoUrl;
-      audioStreamUrl = extracted.audioUrl;
-      streamUserAgent = WEB_UA;
+    for (const pair of extractStreamCandidates(webPlayer.streamingData)) {
+      collectedCandidates.push({
+        ...pair,
+        userAgent: WEB_UA,
+        clientName: 'WEB_HTML',
+      });
     }
   }
 
@@ -609,9 +742,41 @@ export async function fetchYouTubeVideoInfo(
     );
   }
 
-  const proxyUrl = getConfiguredProxy();
-
+  // Prioritize ANDROID_VR and IOS first — they serve 4K/1440p/1080p adaptive streams without ANDROID's HTTP 403 PO-token block
   clientQueue.push(
+    {
+      name: 'ANDROID_VR',
+      ua: 'com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
+      endpoint: 'googleapis',
+      skipVisitorData: true,
+      client: {
+        clientName: 'ANDROID_VR',
+        clientVersion: '1.62.27',
+        deviceMake: 'Oculus',
+        deviceModel: 'Quest 3',
+        osName: 'Android',
+        osVersion: '12L',
+        androidSdkVersion: 32,
+        hl: 'en',
+        gl: 'US',
+      },
+    },
+    {
+      name: 'IOS',
+      ua: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
+      endpoint: 'googleapis',
+      skipVisitorData: true,
+      client: {
+        clientName: 'IOS',
+        clientVersion: '20.10.4',
+        deviceMake: 'Apple',
+        deviceModel: 'iPhone16,2',
+        osName: 'iPhone',
+        osVersion: '18.3.2.22D82',
+        hl: 'en',
+        gl: 'US',
+      },
+    },
     {
       name: 'ANDROID',
       ua: ANDROID_INNERTUBE_UA,
@@ -651,39 +816,6 @@ export async function fetchYouTubeVideoInfo(
       },
     },
     {
-      name: 'ANDROID_VR',
-      ua: 'com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
-      endpoint: 'googleapis',
-      skipVisitorData: true,
-      client: {
-        clientName: 'ANDROID_VR',
-        clientVersion: '1.62.27',
-        deviceMake: 'Oculus',
-        deviceModel: 'Quest 3',
-        osName: 'Android',
-        osVersion: '12L',
-        androidSdkVersion: 32,
-        hl: 'en',
-        gl: 'US',
-      },
-    },
-    {
-      name: 'IOS',
-      ua: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
-      endpoint: 'googleapis',
-      skipVisitorData: true,
-      client: {
-        clientName: 'IOS',
-        clientVersion: '20.10.4',
-        deviceMake: 'Apple',
-        deviceModel: 'iPhone16,2',
-        osName: 'iPhone',
-        osVersion: '18.3.2.22D82',
-        hl: 'en',
-        gl: 'US',
-      },
-    },
-    {
       name: 'TVHTML5',
       ua: 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version',
       endpoint: 'youtube',
@@ -696,94 +828,140 @@ export async function fetchYouTubeVideoInfo(
     }
   );
 
-  if (!streamUrl) {
-    for (const spec of clientQueue) {
-      try {
-        const useGoogleApis = spec.endpoint === 'googleapis' || !apiKey;
-        const playerUrl = useGoogleApis
-          ? 'https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false'
-          : `https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(apiKey!)}&prettyPrint=false`;
+  let verifiedBestCandidate: StreamCandidate | null = null;
+  const verifiedCandidates: StreamCandidate[] = [];
 
-        const includeVisitor = !spec.skipVisitorData && Boolean(visitorData);
-        const headers: Record<string, string> = {
-          'Content-Type': 'application/json',
-          'User-Agent': spec.ua,
-          ...(includeVisitor && visitorData ? { 'X-Goog-Visitor-Id': visitorData } : {}),
-        };
-        if (spec.useAuthCookies && authCookies) {
-          headers.Cookie = authCookies.cookieHeader;
-          headers.Origin = 'https://www.youtube.com';
-          headers['X-Origin'] = 'https://www.youtube.com';
-          if (authCookies.authorization) {
-            headers.Authorization = authCookies.authorization;
-          }
+  for (const spec of clientQueue) {
+    try {
+      const useGoogleApis = spec.endpoint === 'googleapis' || !apiKey;
+      const playerUrl = useGoogleApis
+        ? 'https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false'
+        : `https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(apiKey!)}&prettyPrint=false`;
+
+      const includeVisitor = !spec.skipVisitorData && Boolean(visitorData);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'User-Agent': spec.ua,
+        ...(includeVisitor && visitorData ? { 'X-Goog-Visitor-Id': visitorData } : {}),
+      };
+      if (spec.useAuthCookies && authCookies) {
+        headers.Cookie = authCookies.cookieHeader;
+        headers.Origin = 'https://www.youtube.com';
+        headers['X-Origin'] = 'https://www.youtube.com';
+        if (authCookies.authorization) {
+          headers.Authorization = authCookies.authorization;
         }
+      }
 
-        const data = (await postJsonRequest({
-          url: playerUrl,
-          headers,
-          body: JSON.stringify({
-            videoId,
-            context: {
-              client: {
-                ...spec.client,
-                ...(includeVisitor && visitorData ? { visitorData } : {}),
-              },
+      const data = (await postJsonRequest({
+        url: playerUrl,
+        headers,
+        body: JSON.stringify({
+          videoId,
+          context: {
+            client: {
+              ...spec.client,
+              ...(includeVisitor && visitorData ? { visitorData } : {}),
             },
-            contentCheckOk: true,
-            racyCheckOk: true,
-          }),
-          proxyUrl,
-        })) as InnertubePlayerData | null;
+          },
+          contentCheckOk: true,
+          racyCheckOk: true,
+        }),
+        proxyUrl,
+      })) as InnertubePlayerData | null;
 
-        if (!data) continue;
+      if (!data) continue;
 
-        if (data.videoDetails?.title) title = data.videoDetails.title;
-        if (data.videoDetails?.author) author = data.videoDetails.author;
-        if (data.videoDetails?.lengthSeconds && Number(data.videoDetails.lengthSeconds) > 0) {
-          duration = Number(data.videoDetails.lengthSeconds);
-        }
-        if (data.videoDetails?.shortDescription) {
-          description = data.videoDetails.shortDescription;
-        }
+      if (data.videoDetails?.title) title = data.videoDetails.title;
+      if (data.videoDetails?.author) author = data.videoDetails.author;
+      if (data.videoDetails?.lengthSeconds && Number(data.videoDetails.lengthSeconds) > 0) {
+        duration = Number(data.videoDetails.lengthSeconds);
+      }
+      if (data.videoDetails?.shortDescription) {
+        description = data.videoDetails.shortDescription;
+      }
 
-        if (data.playabilityStatus?.status === 'LOGIN_REQUIRED') {
-          botCheckBlocked = true;
-          continue;
-        }
+      if (data.playabilityStatus?.status === 'LOGIN_REQUIRED') {
+        botCheckBlocked = true;
+        continue;
+      }
 
-        if (data.playabilityStatus?.status === 'OK') {
-          const extracted = extractBestStreams(data.streamingData);
-          if (extracted.videoUrl) {
-            streamUrl = extracted.videoUrl;
-            audioStreamUrl = extracted.audioUrl;
-            streamUserAgent = spec.ua;
-            botCheckBlocked = false;
+      if (data.playabilityStatus?.status === 'OK') {
+        botCheckBlocked = false;
+
+        if (transcript.length === 0) {
+          const tracks = data.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
+          if (tracks.length > 0) {
+            transcript = await fetchBestCaptionTrack(tracks, authCookies?.cookieHeader);
           }
+        }
 
-          if (transcript.length === 0) {
-            const tracks = data.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
-            if (tracks.length > 0) {
-              transcript = await fetchBestCaptionTrack(tracks, authCookies?.cookieHeader);
+        const pairs = extractStreamCandidates(data.streamingData);
+        for (const pair of pairs) {
+          const candidate: StreamCandidate = {
+            ...pair,
+            userAgent: spec.ua,
+            clientName: spec.name,
+          };
+          collectedCandidates.push(candidate);
+
+          const playable = await probeCandidatePlayable(candidate);
+          if (playable) {
+            verifiedCandidates.push(candidate);
+            if (!verifiedBestCandidate || candidate.height > verifiedBestCandidate.height) {
+              verifiedBestCandidate = candidate;
             }
-          }
-
-          if (streamUrl) {
-            logger.info('Resolved direct YouTube video stream', {
-              videoId,
-              client: spec.name,
-              adaptiveMux: Boolean(audioStreamUrl),
-            });
+            // Found a verified playable candidate on this client — no need to probe lower ones from the same client
             break;
           }
         }
-      } catch (err) {
-        logger.warn('Innertube client attempt failed', {
-          videoId,
-          client: spec.name,
-          reason: err instanceof Error ? err.message : 'unknown',
-        });
+
+        // Stop searching additional clients once we have a verified >= 1080p stream
+        if (verifiedBestCandidate && verifiedBestCandidate.height >= 1080) {
+          logger.info('Resolved verified high-quality YouTube video stream', {
+            videoId,
+            client: verifiedBestCandidate.clientName,
+            height: verifiedBestCandidate.height,
+            adaptiveMux: Boolean(verifiedBestCandidate.audioUrl),
+          });
+          break;
+        }
       }
+    } catch (err) {
+      logger.warn('Innertube client attempt failed', {
+        videoId,
+        client: spec.name,
+        reason: err instanceof Error ? err.message : 'unknown',
+      });
+    }
+  }
+
+  // Build final prioritized candidate list: verified playable streams (highest res first), then unverified fallbacks
+  const orderedVerified = [...verifiedCandidates].sort((a, b) => b.height - a.height);
+  const orderedAll = [...collectedCandidates].sort((a, b) => b.height - a.height);
+  const streamCandidates: StreamCandidate[] = [];
+  const seenCandidateKeys = new Set<string>();
+  for (const c of [...orderedVerified, ...orderedAll]) {
+    const key = `${c.videoUrl}|${c.audioUrl ?? ''}`;
+    if (!seenCandidateKeys.has(key)) {
+      seenCandidateKeys.add(key);
+      streamCandidates.push(c);
+    }
+  }
+
+  const chosen = streamCandidates[0] ?? null;
+  if (chosen) {
+    streamUrl = chosen.videoUrl;
+    audioStreamUrl = chosen.audioUrl;
+    streamUserAgent = chosen.userAgent;
+    if (!verifiedBestCandidate || verifiedBestCandidate.height < 1080) {
+      logger.info('Resolved direct YouTube video stream', {
+        videoId,
+        client: chosen.clientName,
+        height: chosen.height,
+        verified: orderedVerified.length > 0,
+        adaptiveMux: Boolean(chosen.audioUrl),
+      });
     }
   }
 
@@ -817,6 +995,7 @@ export async function fetchYouTubeVideoInfo(
     title,
     duration: safeDuration,
     hasDirectStream: Boolean(streamUrl),
+    streamCandidateCount: streamCandidates.length,
     botCheckBlocked,
     transcriptSegments: transcript.length,
     chapters: chapters.length,
@@ -834,6 +1013,7 @@ export async function fetchYouTubeVideoInfo(
     streamUrl,
     audioStreamUrl,
     streamUserAgent,
+    streamCandidates,
     cookieHeader: authCookies?.cookieHeader,
     botCheckBlocked,
     transcript,

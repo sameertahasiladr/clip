@@ -24,6 +24,7 @@ import {
   buildYouTubeCookieHeaders,
   ensureEnglishCaptionUrl,
   extractBestStreams,
+  extractStreamCandidates,
   isTrustedGoogleVideoStreamUrl,
   parseDescriptionChapters,
   parseNetscapeCookies,
@@ -652,6 +653,49 @@ test('extractBestStreams and yt-dlp/ffmpeg settings prioritize highest video & c
   assert.ok(encodeArgs.includes('-profile:v') && encodeArgs[encodeArgs.indexOf('-profile:v') + 1] === 'high');
   assert.ok(encodeArgs.includes('-b:a') && encodeArgs[encodeArgs.indexOf('-b:a') + 1] === '192k');
   assert.ok(encodeArgs.includes('-ar') && encodeArgs[encodeArgs.indexOf('-ar') + 1] === '48000');
+
+  // Verify fallback chain includes 4K adaptive -> 1080p MP4 adaptive -> 360p muxed fallback
+  const chain = extractStreamCandidates({
+    formats: [
+      {
+        url: 'https://rr1.googlevideo.com/videoplayback?itag=18',
+        mimeType: 'video/mp4; codecs="avc1.42001E, mp4a.40.2"',
+        height: 360,
+        bitrate: 500_000,
+      },
+    ],
+    adaptiveFormats: [
+      {
+        url: 'https://rr1.googlevideo.com/videoplayback?itag=299',
+        mimeType: 'video/mp4; codecs="avc1.64002a"',
+        height: 1080,
+        fps: 60,
+        bitrate: 6_000_000,
+      },
+      {
+        url: 'https://rr1.googlevideo.com/videoplayback?itag=313',
+        mimeType: 'video/webm; codecs="vp9"',
+        height: 2160,
+        fps: 60,
+        bitrate: 18_000_000,
+      },
+      {
+        url: 'https://rr1.googlevideo.com/videoplayback?itag=140',
+        mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+        bitrate: 128_000,
+      },
+      {
+        url: 'https://rr1.googlevideo.com/videoplayback?itag=251',
+        mimeType: 'audio/webm; codecs="opus"',
+        bitrate: 160_000,
+      },
+    ],
+  });
+  assert.equal(chain.length, 3);
+  assert.equal(chain[0].height, 2160);
+  assert.equal(chain[1].height, 1080);
+  assert.equal(chain[2].height, 360);
+  assert.equal(chain[2].audioUrl, null);
 });
 
 
