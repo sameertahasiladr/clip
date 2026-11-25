@@ -177,13 +177,50 @@ export function buildVerticalFilterComplex(params: {
   const { width, height, videoLayout, subtitleFilter } = params;
   if (videoLayout === 'vertical-blur') {
     return [
-      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},boxblur=20:3[bg]`,
-      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease[fg]`,
+      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${width}:${height},boxblur=20:3[bg]`,
+      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=lanczos[fg]`,
       `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1${subtitleFilter}[vout]`,
     ].join(';');
   }
 
-  return `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1${subtitleFilter}[vout]`;
+  return `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${width}:${height},setsar=1${subtitleFilter}[vout]`;
+}
+
+/**
+ * Highest-quality H.264 + AAC Shorts/Reels encoding arguments:
+ * visually lossless CRF 17, High@4.2 profile, BT.709 true color metadata, and 192 kbps 48 kHz audio.
+ */
+export function buildHighQualityEncodeArgs(): string[] {
+  return [
+    '-c:v',
+    'libx264',
+    '-profile:v',
+    'high',
+    '-level:v',
+    '4.2',
+    '-preset',
+    'medium',
+    '-crf',
+    '17',
+    '-pix_fmt',
+    'yuv420p',
+    '-color_primaries',
+    'bt709',
+    '-color_trc',
+    'bt709',
+    '-colorspace',
+    'bt709',
+    '-aspect',
+    '9:16',
+    '-c:a',
+    'aac',
+    '-b:a',
+    '192k',
+    '-ar',
+    '48000',
+    '-movflags',
+    '+faststart',
+  ];
 }
 
 /**
@@ -277,25 +314,10 @@ export async function renderVerticalClip(params: {
       '[vout]',
       '-map',
       '0:a?',
-      '-c:v',
-      'libx264',
-      '-preset',
-      'veryfast',
-      '-crf',
-      '23',
-      '-pix_fmt',
-      'yuv420p',
-      '-aspect',
-      '9:16',
-      '-c:a',
-      'aac',
-      '-b:a',
-      '128k',
-      '-movflags',
-      '+faststart',
+      ...buildHighQualityEncodeArgs(),
       outputFilename,
     ],
-    { cwd: resolvedBase, timeout: 4 * 60_000 }
+    { cwd: resolvedBase, timeout: 6 * 60_000 }
   );
 
   await fs.access(outputPath);
@@ -317,7 +339,7 @@ export async function renderVerticalClip(params: {
         '-frames:v',
         '1',
         '-q:v',
-        '3',
+        '2',
         posterFilename,
       ],
       { cwd: resolvedBase, timeout: 30_000 }

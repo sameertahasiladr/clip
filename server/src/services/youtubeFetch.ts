@@ -289,6 +289,7 @@ interface RawStreamFormat {
   url?: string;
   mimeType?: string;
   height?: number;
+  fps?: number;
   bitrate?: number;
 }
 
@@ -312,42 +313,32 @@ interface InnertubePlayerData {
   };
 }
 
-function extractBestStreams(streamingData?: InnertubePlayerData['streamingData']): {
+export function extractBestStreams(streamingData?: InnertubePlayerData['streamingData']): {
   videoUrl: string | null;
   audioUrl: string | null;
 } {
   if (!streamingData) return { videoUrl: null, audioUrl: null };
 
-  // Prefer muxed MP4 <= 1080p first (fast single-file server download with synced audio)
-  const muxedMp4s = (streamingData.formats ?? [])
-    .filter(
-      (f) =>
-        typeof f.url === 'string' &&
-        isTrustedGoogleVideoStreamUrl(f.url) &&
-        (f.mimeType?.includes('video/mp4') ?? false) &&
-        (f.height ?? 720) <= 1080
-    )
-    .sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
-
-  if (muxedMp4s[0]?.url) {
-    return { videoUrl: muxedMp4s[0].url, audioUrl: null };
-  }
-
-  // Fall back to adaptive MP4 video (prefer <=720p for fast downloads, up to 1080p) + M4A audio
+  // 1. Always inspect adaptiveFormats first to capture highest resolution (4K/1440p/1080p60) + highest bitrate audio
   const adaptiveVideos = (streamingData.adaptiveFormats ?? [])
     .filter(
       (f) =>
         typeof f.url === 'string' &&
         isTrustedGoogleVideoStreamUrl(f.url) &&
-        (f.mimeType?.startsWith('video/mp4') ?? false) &&
-        (f.height ?? 0) > 0 &&
-        (f.height ?? 0) <= 1080
+        ((f.mimeType?.startsWith('video/mp4') ?? false) ||
+          (f.mimeType?.startsWith('video/webm') ?? false)) &&
+        (f.height ?? 0) > 0
     )
     .sort((a, b) => {
-      const aPref = (a.height ?? 0) <= 720 ? 1 : 0;
-      const bPref = (b.height ?? 0) <= 720 ? 1 : 0;
-      if (aPref !== bPref) return bPref - aPref;
-      return (b.height ?? 0) - (a.height ?? 0);
+      const heightDiff = (b.height ?? 0) - (a.height ?? 0);
+      if (heightDiff !== 0) return heightDiff;
+      const fpsDiff = (b.fps ?? 0) - (a.fps ?? 0);
+      if (fpsDiff !== 0) return fpsDiff;
+      const bitrateDiff = (b.bitrate ?? 0) - (a.bitrate ?? 0);
+      if (bitrateDiff !== 0) return bitrateDiff;
+      const aMp4 = a.mimeType?.startsWith('video/mp4') ? 1 : 0;
+      const bMp4 = b.mimeType?.startsWith('video/mp4') ? 1 : 0;
+      return bMp4 - aMp4;
     });
 
   const adaptiveAudios = (streamingData.adaptiveFormats ?? [])
@@ -355,12 +346,40 @@ function extractBestStreams(streamingData?: InnertubePlayerData['streamingData']
       (f) =>
         typeof f.url === 'string' &&
         isTrustedGoogleVideoStreamUrl(f.url) &&
-        (f.mimeType?.startsWith('audio/mp4') ?? false)
+        ((f.mimeType?.startsWith('audio/mp4') ?? false) ||
+          (f.mimeType?.startsWith('audio/webm') ?? false))
     )
     .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
 
-  if (adaptiveVideos[0]?.url && adaptiveAudios[0]?.url) {
-    return { videoUrl: adaptiveVideos[0].url, audioUrl: adaptiveAudios[0].url };
+  const muxedStreams = (streamingData.formats ?? [])
+    .filter(
+      (f) =>
+        typeof f.url === 'string' &&
+        isTrustedGoogleVideoStreamUrl(f.url) &&
+        ((f.mimeType?.includes('video/mp4') ?? false) ||
+          (f.mimeType?.includes('video/webm') ?? false))
+    )
+    .sort((a, b) => {
+      const heightDiff = (b.height ?? 0) - (a.height ?? 0);
+      if (heightDiff !== 0) return heightDiff;
+      return (b.bitrate ?? 0) - (a.bitrate ?? 0);
+    });
+
+  const bestAdaptiveVideo = adaptiveVideos[0];
+  const bestAdaptiveAudio = adaptiveAudios[0];
+  const bestMuxed = muxedStreams[0];
+
+  // Use adaptive highest-quality stream whenever available and at least as sharp as muxed
+  if (
+    bestAdaptiveVideo?.url &&
+    bestAdaptiveAudio?.url &&
+    (bestAdaptiveVideo.height ?? 0) >= (bestMuxed?.height ?? 0)
+  ) {
+    return { videoUrl: bestAdaptiveVideo.url, audioUrl: bestAdaptiveAudio.url };
+  }
+
+  if (bestMuxed?.url) {
+    return { videoUrl: bestMuxed.url, audioUrl: null };
   }
 
   return { videoUrl: null, audioUrl: null };
@@ -885,7 +904,7 @@ export async function downloadYouTubeStreamsToFile(params: {
   }
 
   const resolvedBase = path.resolve(jobDir);
-  const outputPath = path.resolve(resolvedBase, 'source.mp4');
+  const outputPath = path.resolve(resolvedBase, audioStreamUrl ? 'source.mkv' : 'source.mp4');
   if (!outputPath.startsWith(resolvedBase + path.sep)) {
     throw new Error('Unsafe source video output path.');
   }
@@ -898,8 +917,8 @@ export async function downloadYouTubeStreamsToFile(params: {
       cookieHeader,
     });
   } else {
-    const tempVideo = path.resolve(resolvedBase, 'video-only.mp4');
-    const tempAudio = path.resolve(resolvedBase, 'audio-only.m4a');
+    const tempVideo = path.resolve(resolvedBase, 'video-only.bin');
+    const tempAudio = path.resolve(resolvedBase, 'audio-only.bin');
     if (
       !tempVideo.startsWith(resolvedBase + path.sep) ||
       !tempAudio.startsWith(resolvedBase + path.sep)
@@ -912,6 +931,7 @@ export async function downloadYouTubeStreamsToFile(params: {
       streamUrlToLocalFile({ url: audioStreamUrl, targetPath: tempAudio, userAgent, cookieHeader }),
     ]);
 
+    // Lossless remux into Matroska supports all highest-quality YouTube codecs (AV1/VP9/H.264 + Opus/AAC)
     await execFileAsync(
       'ffmpeg',
       [
@@ -929,8 +949,6 @@ export async function downloadYouTubeStreamsToFile(params: {
         '-c',
         'copy',
         '-shortest',
-        '-movflags',
-        '+faststart',
         outputPath,
       ],
       { timeout: 120_000 }

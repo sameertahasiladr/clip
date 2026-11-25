@@ -25,13 +25,140 @@ export const VIRAL_DESCRIPTION_HASHTAGS: readonly string[] = [
   '#Reels',
 ];
 
+interface NicheHashtagRule {
+  label: string;
+  keywords: readonly string[];
+  hashtags: readonly string[];
+}
+
+const CONTEXT_NICHE_RULES: readonly NicheHashtagRule[] = [
+  {
+    label: 'Creator & Growth',
+    keywords: [
+      'youtube', 'shorts', 'hook', 'hooks', 'retention', 'views', 'subscriber', 'subscribers',
+      'algorithm', 'creator', 'creators', 'thumbnail', 'editing', 'camera', 'lighting',
+      'filmmaking', 'rpm', 'content', 'channel', 'reels', 'tiktok',
+    ],
+    hashtags: ['#CreatorTips', '#ContentCreator', '#YouTubeGrowth', '#ViralHooks', '#VideoEditing'],
+  },
+  {
+    label: 'Business & Finance',
+    keywords: [
+      'startup', 'startups', 'founder', 'founders', 'business', 'money', 'pricing', 'margin',
+      'revenue', 'sales', 'marketing', 'invest', 'investing', 'stock', 'stocks', 'crypto',
+      'wealth', 'millionaire', 'income', 'profit', 'client', 'clients', 'entrepreneur',
+    ],
+    hashtags: ['#Entrepreneur', '#BusinessTips', '#StartupLife', '#MoneyMindset', '#FinanceShorts'],
+  },
+  {
+    label: 'AI & Tech',
+    keywords: [
+      'ai', 'chatgpt', 'gemini', 'claude', 'openai', 'coding', 'code', 'programming', 'developer',
+      'software', 'tech', 'technology', 'app', 'iphone', 'android', 'laptop', 'gadget', 'robot',
+      'engineering', 'python', 'javascript', 'automation',
+    ],
+    hashtags: ['#TechShorts', '#AI', '#TechTrends', '#FutureTech', '#Coding'],
+  },
+  {
+    label: 'Motivation & Mindset',
+    keywords: [
+      'mindset', 'discipline', 'habit', 'habits', 'success', 'focus', 'grind', 'hustle',
+      'motivation', 'inspire', 'life', 'lesson', 'lessons', 'advice', 'mistake', 'mistakes',
+      'growth', 'productivity', 'goals', 'confidence', 'psychology',
+    ],
+    hashtags: ['#Motivation', '#SuccessMindset', '#DailyMotivation', '#SelfImprovement', '#Mindset'],
+  },
+  {
+    label: 'Podcast & Interviews',
+    keywords: [
+      'podcast', 'interview', 'guest', 'host', 'story', 'stories', 'asked', 'conversation',
+      'debate', 'truth', 'secret', 'secrets', 'unpopular', 'opinion',
+    ],
+    hashtags: ['#PodcastClips', '#PodcastShorts', '#Interview', '#DeepTalk', '#RealTalk'],
+  },
+  {
+    label: 'Fitness & Health',
+    keywords: [
+      'gym', 'workout', 'fitness', 'muscle', 'protein', 'diet', 'weight', 'fat', 'cardio',
+      'health', 'sleep', 'training', 'exercise', 'strength', 'running', 'bodybuilding',
+    ],
+    hashtags: ['#FitnessShorts', '#WorkoutTips', '#GymMotivation', '#HealthyLifestyle', '#FitTok'],
+  },
+  {
+    label: 'Gaming & Esports',
+    keywords: [
+      'game', 'gaming', 'gamer', 'gameplay', 'minecraft', 'fortnite', 'valorant', 'gta',
+      'esports', 'clutch', 'stream', 'streamer', 'boss', 'speedrun', 'console', 'ps5',
+    ],
+    hashtags: ['#GamingShorts', '#Gamer', '#Gameplay', '#GamingClips', '#Esports'],
+  },
+  {
+    label: 'Food & Cooking',
+    keywords: [
+      'recipe', 'cook', 'cooking', 'chef', 'food', 'kitchen', 'delicious', 'taste', 'eat',
+      'eating', 'restaurant', 'streetfood', 'meal', 'dinner', 'breakfast', 'baking',
+    ],
+    hashtags: ['#FoodShorts', '#CookingTips', '#EasyRecipe', '#Foodie', '#QuickRecipes'],
+  },
+  {
+    label: 'Comedy & Entertainment',
+    keywords: [
+      'funny', 'comedy', 'joke', 'laugh', 'prank', 'meme', 'memes', 'reaction', 'react',
+      'crazy', 'insane', 'wild', 'hilarious', 'skit', 'roast', 'epic',
+    ],
+    hashtags: ['#ComedyShorts', '#FunnyVideos', '#Relatable', '#Entertainment', '#LaughOutLoud'],
+  },
+  {
+    label: 'Education & Science',
+    keywords: [
+      'science', 'physics', 'space', 'history', 'fact', 'facts', 'learn', 'explained',
+      'tutorial', 'how', 'study', 'brain', 'universe', 'experiment', 'math', 'discovery',
+    ],
+    hashtags: ['#DidYouKnow', '#LearnOnYouTube', '#MindBlown', '#FunFacts', '#EduShorts'],
+  },
+  {
+    label: 'Travel & Lifestyle',
+    keywords: [
+      'travel', 'trip', 'vacation', 'flight', 'hotel', 'country', 'city', 'explore',
+      'adventure', 'vlog', 'lifestyle', 'morning', 'routine', 'aesthetic', 'beach', 'mountain',
+    ],
+    hashtags: ['#TravelShorts', '#Wanderlust', '#DailyVlog', '#Lifestyle', '#ExploreMore'],
+  },
+  {
+    label: 'Music & Audio',
+    keywords: [
+      'music', 'song', 'beat', 'beats', 'guitar', 'piano', 'singer', 'vocals', 'lyrics',
+      'concert', 'rap', 'hiphop', 'melody', 'remix', 'producer', 'album',
+    ],
+    hashtags: ['#MusicShorts', '#NewMusic', '#MusicProducer', '#LiveMusic', '#ViralSound'],
+  },
+];
+
 const STOP_WORDS = new Set([
   'the', 'and', 'for', 'that', 'this', 'with', 'from', 'your', 'about', 'have', 'what', 'when',
   'where', 'which', 'while', 'will', 'would', 'could', 'should', 'into', 'over', 'after', 'before',
   'here', 'there', 'their', 'they', 'them', 'then', 'than', 'just', 'like', 'more', 'most', 'only',
   'very', 'some', 'such', 'make', 'made', 'does', 'dont', 'cant', 'wont', 'been', 'being', 'every',
   'clip', 'video', 'watch', 'part', 'guys', 'back', 'really', 'actually', 'literally', 'because',
+  'first', 'second', 'seconds', 'thing', 'things', 'people', 'never', 'always', 'still', 'right',
 ]);
+
+export interface VideoHashtagContext {
+  title: string;
+  caption?: string;
+  transcriptCues?: ReadonlyArray<{ text: string }>;
+  maxTitleTags?: number;
+  maxDescriptionTags?: number;
+}
+
+export interface ViralHashtagSuggestions {
+  detectedNiche: string | null;
+  titleHashtags: string[];
+  nicheHashtags: string[];
+  topicHashtags: string[];
+  viralHashtags: string[];
+  allDescriptionHashtags: string[];
+}
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
@@ -44,17 +171,38 @@ export function hasHashtag(text: string, tag: string): boolean {
   return new RegExp(`(^|\\s)#${escaped}\\b`, 'i').test(text);
 }
 
+function dedupeHashtags(tags: readonly string[]): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of tags) {
+    const clean = raw.startsWith('#') ? raw : `#${raw}`;
+    if (!/^#[A-Za-z][A-Za-z0-9_]{1,28}$/.test(clean)) continue;
+    const key = clean.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(clean);
+    }
+  }
+  return result;
+}
+
 /**
- * Extracts up to 4 clean topic hashtags from the clip's title/caption so YouTube descriptions
- * combine clip-specific keywords with trending Shorts hashtags.
+ * Extracts clean topic hashtags from the clip's title, caption, and spoken transcript cues
+ * so YouTube metadata combines clip-specific keywords with trending Shorts hashtags.
  */
-export function extractTopicHashtags(title: string, caption: string, maxCount = 4): string[] {
-  const combined = `${title} ${caption}`;
+export function extractTopicHashtags(
+  title: string,
+  caption: string,
+  maxCount = 4,
+  transcriptCues?: ReadonlyArray<{ text: string }>
+): string[] {
+  const transcriptText = (transcriptCues ?? []).map((c) => c.text).join(' ');
+  const combined = `${title} ${caption} ${transcriptText}`;
   const found: string[] = [];
   const seen = new Set<string>();
 
-  // Preserve any existing custom hashtags from the caption first
-  const existingMatches = combined.match(/#[A-Za-z][A-Za-z0-9_]{2,24}/g) ?? [];
+  // Preserve any existing custom hashtags from title/caption first
+  const existingMatches = `${title} ${caption}`.match(/#[A-Za-z][A-Za-z0-9_]{2,24}/g) ?? [];
   for (const raw of existingMatches) {
     const key = raw.toLowerCase();
     if (!seen.has(key)) {
@@ -64,17 +212,36 @@ export function extractTopicHashtags(title: string, caption: string, maxCount = 
     if (found.length >= maxCount) return found;
   }
 
-  // Derive additional topic hashtags from prominent words in the title
-  const words = title
-    .replace(/#[A-Za-z0-9_]+/g, ' ')
-    .replace(/[^A-Za-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter((w) => w.length >= 4 && !/^\d+$/.test(w));
+  // Score candidate context words (title words weighted 3x, caption/transcript 1x)
+  const wordScores = new Map<string, { score: number; sample: string }>();
+  const addWords = (source: string, weight: number) => {
+    const tokens = source
+      .replace(/#[A-Za-z0-9_]+/g, ' ')
+      .replace(/[^A-Za-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length >= 4 && !/^\d+$/.test(w));
 
-  for (const word of words) {
-    const lower = word.toLowerCase();
-    if (STOP_WORDS.has(lower)) continue;
-    const tag = `#${word.charAt(0).toUpperCase()}${lower.slice(1)}`;
+    for (const token of tokens) {
+      const lower = token.toLowerCase();
+      if (STOP_WORDS.has(lower)) continue;
+      const prev = wordScores.get(lower);
+      if (prev) {
+        prev.score += weight;
+      } else {
+        wordScores.set(lower, { score: weight, sample: token });
+      }
+    }
+  };
+
+  addWords(title, 3);
+  addWords(caption, 2);
+  if (transcriptText) addWords(transcriptText, 1);
+
+  const ranked = Array.from(wordScores.entries())
+    .sort((a, b) => b[1].score - a[1].score || b[0].length - a[0].length)
+    .map(([lower]) => `#${lower.charAt(0).toUpperCase()}${lower.slice(1)}`);
+
+  for (const tag of ranked) {
     const key = tag.toLowerCase();
     if (!seen.has(key)) {
       seen.add(key);
@@ -84,6 +251,76 @@ export function extractTopicHashtags(title: string, caption: string, maxCount = 
   }
 
   return found;
+}
+
+/**
+ * Analyzes video context (title, caption, and spoken transcript cues) and suggests
+ * trending, niche-matched, and viral Shorts hashtags for injection into the metadata editor.
+ */
+export function suggestViralHashtags(context: VideoHashtagContext): ViralHashtagSuggestions {
+  const title = context.title ?? '';
+  const caption = context.caption ?? '';
+  const transcriptText = (context.transcriptCues ?? []).map((c) => c.text).join(' ');
+  const combinedLower = `${title} ${title} ${caption} ${transcriptText}`.toLowerCase();
+  const tokenSet = new Set(combinedLower.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean));
+
+  const nicheMatches: Array<{ rule: NicheHashtagRule; score: number }> = [];
+  for (const rule of CONTEXT_NICHE_RULES) {
+    let score = 0;
+    for (const kw of rule.keywords) {
+      if (tokenSet.has(kw)) {
+        score += title.toLowerCase().includes(kw) ? 3 : 1;
+      }
+    }
+    if (score > 0) {
+      nicheMatches.push({ rule, score });
+    }
+  }
+  nicheMatches.sort((a, b) => b.score - a.score);
+
+  const primaryNiche = nicheMatches[0]?.rule ?? null;
+  const secondaryNiche = nicheMatches[1]?.rule ?? null;
+
+  const nicheHashtags = dedupeHashtags([
+    ...(primaryNiche?.hashtags ?? []),
+    ...(secondaryNiche ? secondaryNiche.hashtags.slice(0, 2) : []),
+  ]);
+
+  const topicHashtags = extractTopicHashtags(title, caption, 4, context.transcriptCues);
+  const viralHashtags = [...VIRAL_DESCRIPTION_HASHTAGS];
+
+  const maxTitleTags = context.maxTitleTags ?? 8;
+  const titleHashtags = dedupeHashtags([
+    '#Shorts',
+    '#Viral',
+    '#Trending',
+    ...(nicheHashtags.slice(0, 2)),
+    ...(topicHashtags.slice(0, 2)),
+    '#YouTubeShorts',
+    '#FYP',
+    '#MustWatch',
+  ]).slice(0, maxTitleTags);
+
+  const maxDescTags = context.maxDescriptionTags ?? 18;
+  const allDescriptionHashtags = dedupeHashtags([
+    '#Shorts',
+    '#Viral',
+    '#Trending',
+    '#YouTubeShorts',
+    '#ViralShorts',
+    ...nicheHashtags,
+    ...topicHashtags,
+    ...viralHashtags,
+  ]).slice(0, maxDescTags);
+
+  return {
+    detectedNiche: primaryNiche?.label ?? null,
+    titleHashtags,
+    nicheHashtags,
+    topicHashtags,
+    viralHashtags,
+    allDescriptionHashtags,
+  };
 }
 
 /**
@@ -119,9 +356,13 @@ export function buildDefaultYouTubeTitle(rawTitle: string): string {
 
 /**
  * Builds a YouTube-ready Shorts description (up to 5000 characters) pre-populated
- * with the clip summary, engagement CTA, topic hashtags, and high-reach viral hashtags.
+ * with the clip summary, engagement CTA, context-matched trending niche tags, and viral hashtags.
  */
-export function buildDefaultYouTubeDescription(rawTitle: string, rawCaption: string): string {
+export function buildDefaultYouTubeDescription(
+  rawTitle: string,
+  rawCaption: string,
+  transcriptCues?: ReadonlyArray<{ text: string }>
+): string {
   const cleanTitle = normalizeWhitespace(rawTitle);
   const cleanCaption = rawCaption.trim();
 
@@ -130,17 +371,11 @@ export function buildDefaultYouTubeDescription(rawTitle: string, rawCaption: str
     .replace(/(?:\s+#[A-Za-z0-9_]+)+\s*$/g, '')
     .trim();
 
-  const topicTags = extractTopicHashtags(cleanTitle, cleanCaption, 4);
-  const allTags: string[] = [];
-  const seen = new Set<string>();
-
-  for (const tag of [...VIRAL_DESCRIPTION_HASHTAGS, ...topicTags]) {
-    const key = tag.toLowerCase();
-    if (!seen.has(key)) {
-      seen.add(key);
-      allTags.push(tag);
-    }
-  }
+  const suggestions = suggestViralHashtags({
+    title: cleanTitle,
+    caption: cleanCaption,
+    transcriptCues,
+  });
 
   const blocks: string[] = [];
   if (captionBody) {
@@ -149,7 +384,7 @@ export function buildDefaultYouTubeDescription(rawTitle: string, rawCaption: str
     blocks.push(cleanTitle);
   }
   blocks.push('Watch till the end and subscribe for more viral Shorts!');
-  blocks.push(allTags.join(' '));
+  blocks.push(suggestions.allDescriptionHashtags.join(' '));
 
   return blocks.join('\n\n').slice(0, YOUTUBE_DESCRIPTION_MAX_CHARS);
 }
@@ -184,7 +419,7 @@ export function appendHashtagSafely(
 }
 
 /**
- * Appends any missing viral hashtags from VIRAL_DESCRIPTION_HASHTAGS into the description
+ * Appends any missing context-matched & viral hashtags into the description
  * without exceeding the 5000-character YouTube limit.
  */
 export function appendViralHashtagsPack(
@@ -192,7 +427,7 @@ export function appendViralHashtagsPack(
   extraTags: readonly string[] = []
 ): string {
   let next = currentDescription;
-  for (const tag of [...VIRAL_DESCRIPTION_HASHTAGS, ...extraTags]) {
+  for (const tag of dedupeHashtags([...extraTags, ...VIRAL_DESCRIPTION_HASHTAGS])) {
     next = appendHashtagSafely(next, tag, YOUTUBE_DESCRIPTION_MAX_CHARS, '\n');
   }
   return next;

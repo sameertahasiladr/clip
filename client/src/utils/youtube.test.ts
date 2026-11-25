@@ -13,6 +13,7 @@ import {
   appendHashtagSafely,
   buildDefaultYouTubeDescription,
   buildDefaultYouTubeTitle,
+  suggestViralHashtags,
 } from './youtubeMetadata';
 
 test('validateYouTubeUrl accepts watch, youtu.be, and shorts formats', () => {
@@ -102,4 +103,27 @@ test('buildDefaultYouTubeDescription includes viral hashtags and respects 5000 c
   const same = appendHashtagSafely(desc, '#Viral', YOUTUBE_DESCRIPTION_MAX_CHARS, '\n');
   assert.equal(same, desc);
 });
+
+test('suggestViralHashtags recommends context-matched niche, topic, and viral hashtags', () => {
+  const aiResult = suggestViralHashtags({
+    title: 'How AI Coding Agents Automate Python Workflows',
+    caption: 'Build faster developer pipelines with OpenAI and automation.',
+    transcriptCues: [{ text: 'THIS CODING TOOL SAVES DEVELOPERS HOURS' }],
+  });
+  assert.equal(aiResult.detectedNiche, 'AI & Tech');
+  assert.ok(aiResult.titleHashtags.includes('#Shorts'));
+  assert.ok(aiResult.titleHashtags.includes('#Viral'));
+  assert.ok(aiResult.nicheHashtags.includes('#TechShorts'));
+  assert.ok(aiResult.allDescriptionHashtags.includes('#Trending'));
+  assert.ok(aiResult.allDescriptionHashtags.includes('#TechShorts'));
+
+  const fitnessResult = suggestViralHashtags({
+    title: '30-Second Gym Workout Tip for Faster Muscle Growth',
+    caption: 'Improve your strength training and protein intake.',
+  });
+  assert.equal(fitnessResult.detectedNiche, 'Fitness & Health');
+  assert.ok(fitnessResult.nicheHashtags.includes('#FitnessShorts'));
+  assert.ok(fitnessResult.allDescriptionHashtags.includes('#WorkoutTips'));
+});
+
 

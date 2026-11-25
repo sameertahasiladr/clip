@@ -7,13 +7,23 @@ import {
   validateCreateJobRequest,
   validateSelectedMoments,
 } from './validation.js';
-import { isValidProxyUrl, parseSubtitlesToSegments } from './services/ytdlp.js';
-import { buildAssSubtitles, buildVerticalFilterComplex } from './services/ffmpeg.js';
+import {
+  YTDLP_BEST_QUALITY_FORMAT,
+  YTDLP_QUALITY_SORT,
+  isValidProxyUrl,
+  parseSubtitlesToSegments,
+} from './services/ytdlp.js';
+import {
+  buildAssSubtitles,
+  buildHighQualityEncodeArgs,
+  buildVerticalFilterComplex,
+} from './services/ffmpeg.js';
 import { InMemoryJobStore } from './queue/jobStore.js';
 import { InMemoryClipQueue } from './queue/jobQueue.js';
 import {
   buildYouTubeCookieHeaders,
   ensureEnglishCaptionUrl,
+  extractBestStreams,
   isTrustedGoogleVideoStreamUrl,
   parseDescriptionChapters,
   parseNetscapeCookies,
@@ -410,14 +420,16 @@ test('viral hook scorer ranks a strong hook above generic channel intros and pic
   assert.equal(picked[0].start, 20, 'Should pick the viral hook at 20s instead of the 0s channel intro');
 });
 
-test('buildVerticalFilterComplex supports both full vertical crop and horizontal-in-9:16 blurred fill', () => {
+test('buildVerticalFilterComplex supports Lanczos full vertical crop and horizontal-in-9:16 blurred fill', () => {
   const fillFilter = buildVerticalFilterComplex({
     width: 1080,
     height: 1920,
     videoLayout: 'vertical-fill',
     subtitleFilter: ',ass=clip-1.ass',
   });
-  assert.ok(fillFilter.includes('scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1'));
+  assert.ok(
+    fillFilter.includes('scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,setsar=1')
+  );
   assert.ok(!fillFilter.includes('boxblur'));
   assert.ok(fillFilter.includes(',ass=clip-1.ass'));
 
@@ -428,7 +440,7 @@ test('buildVerticalFilterComplex supports both full vertical crop and horizontal
     subtitleFilter: ',ass=clip-1.ass',
   });
   assert.ok(blurFilter.includes('boxblur=20:3[bg]'));
-  assert.ok(blurFilter.includes('force_original_aspect_ratio=decrease[fg]'));
+  assert.ok(blurFilter.includes('force_original_aspect_ratio=decrease:flags=lanczos[fg]'));
   assert.ok(blurFilter.includes('[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,ass=clip-1.ass[vout]'));
 });
 
@@ -582,6 +594,66 @@ test('formatYouTubeUploadMetadata enforces 100-char title, 5000-char description
   assert.ok(maxSized.description.length <= 5000);
   assert.ok(maxSized.tags.includes('MyTag'));
 });
+
+test('extractBestStreams and yt-dlp/ffmpeg settings prioritize highest video & clip quality (4K/1080p60 + CRF 17)', () => {
+  const picked = extractBestStreams({
+    formats: [
+      {
+        url: 'https://rr1.googlevideo.com/videoplayback?itag=18',
+        mimeType: 'video/mp4; codecs="avc1.42001E, mp4a.40.2"',
+        height: 360,
+        bitrate: 500_000,
+      },
+    ],
+    adaptiveFormats: [
+      {
+        url: 'https://rr1.googlevideo.com/videoplayback?itag=136',
+        mimeType: 'video/mp4; codecs="avc1.4d401f"',
+        height: 720,
+        fps: 30,
+        bitrate: 2_500_000,
+      },
+      {
+        url: 'https://rr1.googlevideo.com/videoplayback?itag=299',
+        mimeType: 'video/mp4; codecs="avc1.64002a"',
+        height: 1080,
+        fps: 60,
+        bitrate: 6_000_000,
+      },
+      {
+        url: 'https://rr1.googlevideo.com/videoplayback?itag=313',
+        mimeType: 'video/webm; codecs="vp9"',
+        height: 2160,
+        fps: 60,
+        bitrate: 18_000_000,
+      },
+      {
+        url: 'https://rr1.googlevideo.com/videoplayback?itag=140',
+        mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+        bitrate: 128_000,
+      },
+      {
+        url: 'https://rr1.googlevideo.com/videoplayback?itag=251',
+        mimeType: 'audio/webm; codecs="opus"',
+        bitrate: 160_000,
+      },
+    ],
+  });
+
+  // Must pick 4K 2160p60 video + highest-bitrate 160k audio instead of 360p muxed or 720p
+  assert.equal(picked.videoUrl, 'https://rr1.googlevideo.com/videoplayback?itag=313');
+  assert.equal(picked.audioUrl, 'https://rr1.googlevideo.com/videoplayback?itag=251');
+
+  assert.equal(YTDLP_BEST_QUALITY_FORMAT, 'bestvideo+bestaudio/best');
+  assert.ok(YTDLP_QUALITY_SORT.startsWith('res,fps,vbr,abr'));
+
+  const encodeArgs = buildHighQualityEncodeArgs();
+  assert.ok(encodeArgs.includes('-crf') && encodeArgs[encodeArgs.indexOf('-crf') + 1] === '17');
+  assert.ok(encodeArgs.includes('-profile:v') && encodeArgs[encodeArgs.indexOf('-profile:v') + 1] === 'high');
+  assert.ok(encodeArgs.includes('-b:a') && encodeArgs[encodeArgs.indexOf('-b:a') + 1] === '192k');
+  assert.ok(encodeArgs.includes('-ar') && encodeArgs[encodeArgs.indexOf('-ar') + 1] === '48000');
+});
+
 
 
 

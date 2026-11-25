@@ -137,11 +137,15 @@ export async function fetchVideoMetadata(
   };
 }
 
+export const YTDLP_BEST_QUALITY_FORMAT = 'bestvideo+bestaudio/best';
+export const YTDLP_QUALITY_SORT = 'res,fps,vbr,abr,ext:mp4:m4a';
+
 /**
- * Downloads the best MP4 video stream up to 1080p into the confined job directory.
+ * Downloads the highest available YouTube video & audio quality (including 4K/1440p/1080p60)
+ * losslessly remuxed into the confined job directory.
  */
 export async function downloadVideo(canonicalUrl: string, jobDir: string): Promise<string> {
-  const outputPath = assertPathInside(jobDir, path.join(jobDir, 'source.mp4'));
+  const outputTemplate = assertPathInside(jobDir, path.join(jobDir, 'source.%(ext)s'));
   const baseArgs = await buildYtDlpBaseArgs(jobDir);
 
   await execFileAsync(
@@ -149,19 +153,39 @@ export async function downloadVideo(canonicalUrl: string, jobDir: string): Promi
     [
       ...baseArgs,
       '-f',
-      'bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4][height<=1080]/best[height<=1080]',
+      YTDLP_BEST_QUALITY_FORMAT,
+      '-S',
+      YTDLP_QUALITY_SORT,
       '--merge-output-format',
-      'mp4',
+      'mkv',
       '-o',
-      outputPath,
+      outputTemplate,
       '--',
       canonicalUrl,
     ],
     { maxBuffer: 20 * 1024 * 1024, timeout: 10 * 60_000 }
   );
 
-  await fs.access(outputPath);
-  return outputPath;
+  // Locate the highest-quality merged source file (source.mkv, source.mp4, or source.webm)
+  const candidates = ['source.mkv', 'source.mp4', 'source.webm'];
+  for (const name of candidates) {
+    const candidatePath = assertPathInside(jobDir, path.join(jobDir, name));
+    try {
+      const stat = await fs.stat(candidatePath);
+      if (stat.size > 10_000) {
+        return candidatePath;
+      }
+    } catch {
+      // Check next extension
+    }
+  }
+
+  const files = await fs.readdir(jobDir);
+  const matched = files.find((f) => f.startsWith('source.') && !f.endsWith('.part'));
+  if (!matched) {
+    throw new Error('yt-dlp finished without producing a video file.');
+  }
+  return assertPathInside(jobDir, path.join(jobDir, matched));
 }
 
 function parseTimestampToSeconds(ts: string): number {

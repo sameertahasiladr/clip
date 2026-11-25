@@ -89,7 +89,7 @@ export function ClipCard({
   const [isYouTubeModalOpen, setIsYouTubeModalOpen] = useState(false);
   const [youtubeTitle, setYoutubeTitle] = useState(() => buildDefaultYouTubeTitle(clip.title));
   const [youtubeDescription, setYoutubeDescription] = useState(() =>
-    buildDefaultYouTubeDescription(clip.title, clip.caption)
+    buildDefaultYouTubeDescription(clip.title, clip.caption, clip.captionCues)
   );
   const [clipYoutubePrivacy, setClipYoutubePrivacy] =
     useState<YouTubePrivacyStatus>(youtubePrivacy);

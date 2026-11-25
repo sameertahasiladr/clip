@@ -19,12 +19,10 @@ import { formatDuration } from '../utils/youtube';
 import {
   YOUTUBE_DESCRIPTION_MAX_CHARS,
   YOUTUBE_TITLE_MAX_CHARS,
-  TITLE_SUGGESTED_HASHTAGS,
-  VIRAL_DESCRIPTION_HASHTAGS,
   appendHashtagSafely,
   appendViralHashtagsPack,
-  extractTopicHashtags,
   hasHashtag,
+  suggestViralHashtags,
 } from '../utils/youtubeMetadata';
 
 interface YouTubePublishModalProps {
@@ -66,23 +64,18 @@ export function YouTubePublishModal({
 }: YouTubePublishModalProps) {
   const [copiedField, setCopiedField] = useState<'title' | 'description' | null>(null);
 
-  const topicHashtags = useMemo(
-    () => extractTopicHashtags(clip.title, clip.caption, 4),
-    [clip.caption, clip.title]
+  const hashtagSuggestions = useMemo(
+    () =>
+      suggestViralHashtags({
+        title: `${clip.title} ${title}`,
+        caption: `${clip.caption} ${description}`,
+        transcriptCues: clip.captionCues,
+      }),
+    [clip.caption, clip.captionCues, clip.title, description, title]
   );
 
-  const descriptionHashtagOptions = useMemo(() => {
-    const merged: string[] = [];
-    const seen = new Set<string>();
-    for (const tag of [...VIRAL_DESCRIPTION_HASHTAGS, ...topicHashtags]) {
-      const key = tag.toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
-        merged.push(tag);
-      }
-    }
-    return merged;
-  }, [topicHashtags]);
+  const titleHashtagOptions = hashtagSuggestions.titleHashtags;
+  const descriptionHashtagOptions = hashtagSuggestions.allDescriptionHashtags;
 
   useEffect(() => {
     if (!isOpen) return;
@@ -246,12 +239,19 @@ export function YouTubePublishModal({
 
                 {/* Suggested hashtags row matching YouTube Studio */}
                 <div className="mt-3 border-t border-white/[0.07] pt-3">
-                  <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
-                    <Sparkles className="h-3.5 w-3.5 text-fuchsia-400" aria-hidden="true" />
-                    <span>Suggested hashtags for title</span>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-medium text-zinc-400">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Sparkles className="h-3.5 w-3.5 text-fuchsia-400" aria-hidden="true" />
+                      <span>Suggested viral hashtags for title</span>
+                    </span>
+                    {hashtagSuggestions.detectedNiche && (
+                      <span className="text-[10px] font-medium text-fuchsia-300/90">
+                        Context: {hashtagSuggestions.detectedNiche}
+                      </span>
+                    )}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
-                    {TITLE_SUGGESTED_HASHTAGS.map((tag) => {
+                    {titleHashtagOptions.map((tag) => {
                       const active = hasHashtag(title, tag);
                       const wouldExceed =
                         !active &&
@@ -347,18 +347,25 @@ export function YouTubePublishModal({
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
                       <Hash className="h-3.5 w-3.5 text-fuchsia-400" aria-hidden="true" />
-                      <span>Viral hashtags for description</span>
+                      <span>
+                        Trending &amp; viral hashtags
+                        {hashtagSuggestions.detectedNiche
+                          ? ` · ${hashtagSuggestions.detectedNiche}`
+                          : ''}
+                      </span>
                     </div>
                     <button
                       type="button"
                       disabled={isPublishing}
                       onClick={() =>
-                        onDescriptionChange(appendViralHashtagsPack(description, topicHashtags))
+                        onDescriptionChange(
+                          appendViralHashtagsPack(description, descriptionHashtagOptions)
+                        )
                       }
                       className="inline-flex items-center gap-1 rounded-md border border-fuchsia-500/35 bg-fuchsia-500/10 px-2.5 py-1 text-[11px] font-semibold text-fuchsia-200 hover:bg-fuchsia-500/20 transition-colors disabled:opacity-50"
                     >
                       <Sparkles className="h-3 w-3" aria-hidden="true" />
-                      <span>Add Viral Hashtags</span>
+                      <span>Inject Viral Hashtags</span>
                     </button>
                   </div>
 
