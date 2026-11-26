@@ -608,7 +608,8 @@ test('formatYouTubeUploadMetadata enforces 100-char title, 5000-char description
   assert.ok(autoTagged.title.includes('#Shorts'));
   assert.ok(autoTagged.title.includes('#Viral'));
   assert.ok(autoTagged.title.length <= 100);
-  assert.ok(autoTagged.description.includes('#Trending'));
+  assert.ok(autoTagged.description.includes('#morningpost'));
+  assert.ok(autoTagged.description.includes('#trending'));
   assert.ok(autoTagged.tags.includes('Shorts'));
   assert.ok(autoTagged.tags.includes('Viral'));
 

@@ -8,6 +8,7 @@ import {
 } from './youtube';
 import { buildMockClips } from '../api';
 import {
+  DEFAULT_DESCRIPTION_CAPTION,
   YOUTUBE_DESCRIPTION_MAX_CHARS,
   YOUTUBE_TITLE_MAX_CHARS,
   appendHashtagSafely,
@@ -88,19 +89,20 @@ test('buildDefaultYouTubeTitle includes #Shorts and #Viral within 100 chars even
   assert.ok(veryLongTitle.length <= YOUTUBE_TITLE_MAX_CHARS);
 });
 
-test('buildDefaultYouTubeDescription includes viral hashtags and respects 5000 char limit', () => {
+test('buildDefaultYouTubeDescription uses the configured viral hashtag caption within 5000 char limit', () => {
   const desc = buildDefaultYouTubeDescription(
     'Creator Growth Strategy',
     'Start inside the tension and double your retention overnight. #creatorstrategy'
   );
-  assert.ok(desc.includes('#Shorts'));
-  assert.ok(desc.includes('#Viral'));
-  assert.ok(desc.includes('#Trending'));
-  assert.ok(desc.includes('#YouTubeShorts'));
+  assert.equal(desc, DEFAULT_DESCRIPTION_CAPTION);
+  assert.ok(desc.includes('#morningpost'));
+  assert.ok(desc.includes('#viralvideos'));
+  assert.ok(desc.includes('#trending'));
+  assert.ok(desc.includes('#youtubeshorts'));
   assert.ok(desc.length <= YOUTUBE_DESCRIPTION_MAX_CHARS);
 
   // Appending an already-present hashtag does not duplicate it
-  const same = appendHashtagSafely(desc, '#Viral', YOUTUBE_DESCRIPTION_MAX_CHARS, '\n');
+  const same = appendHashtagSafely(desc, '#viral', YOUTUBE_DESCRIPTION_MAX_CHARS, '\n');
   assert.equal(same, desc);
 });
 

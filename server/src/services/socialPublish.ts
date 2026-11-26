@@ -131,7 +131,7 @@ export async function resolveClipMediaForPublish(params: {
 const YOUTUBE_TITLE_LIMIT = 100;
 const YOUTUBE_DESCRIPTION_LIMIT = 5000;
 const DEFAULT_VIRAL_SHORTS_HASHTAGS =
-  '#Shorts #Viral #Trending #YouTubeShorts #ViralShorts #FYP #MustWatch';
+  '#morningpost #viralvideos #trending #viralposts #viralchallenge #hottrending #viralnow #trendingpost #instatrending #reels #bhojpuri #kpop #sad #funny #motivation #viral #bgmi #anime #kitten #funny #art #viralshorts #humor #viral #love #dance #jokes #quotes #wedding #edit #trending #reels #trendingshorts #youtubeshorts #usa #india #omletarcade #pubgmobile #art #shortvideo #dance #funny #fyp #gaming #humor #jokes #knowledge #love #live #zodiac #xbox #comedy #cute #viralshort #bgmi #news #motivation';
 
 /**
  * Formats YouTube Shorts upload metadata honoring YouTube Studio's exact 100-char title

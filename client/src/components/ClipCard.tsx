@@ -149,7 +149,7 @@ export function ClipCard({
         jobId,
         clipIndex: index + 1,
         title: overrides?.title ?? (platform === 'youtube' ? youtubeTitle : clip.title),
-        caption: overrides?.caption ?? (platform === 'youtube' ? youtubeDescription : clip.caption),
+        caption: overrides?.caption ?? youtubeDescription,
         privacyStatus:
           platform === 'youtube' ? (overrides?.privacyStatus ?? clipYoutubePrivacy) : undefined,
       });

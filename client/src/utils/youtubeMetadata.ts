@@ -10,6 +10,9 @@ export const TITLE_SUGGESTED_HASHTAGS: readonly string[] = [
   '#MustWatch',
 ];
 
+export const DEFAULT_DESCRIPTION_CAPTION =
+  '#morningpost #viralvideos #trending #viralposts #viralchallenge #hottrending #viralnow #trendingpost #instatrending #reels #bhojpuri #kpop #sad #funny #motivation #viral #bgmi #anime #kitten #funny #art #viralshorts #humor #viral #love #dance #jokes #quotes #wedding #edit #trending #reels #trendingshorts #youtubeshorts #usa #india #omletarcade #pubgmobile #art #shortvideo #dance #funny #fyp #gaming #humor #jokes #knowledge #love #live #zodiac #xbox #comedy #cute #viralshort #bgmi #news #motivation';
+
 export const VIRAL_DESCRIPTION_HASHTAGS: readonly string[] = [
   '#Shorts',
   '#Viral',
@@ -355,38 +358,15 @@ export function buildDefaultYouTubeTitle(rawTitle: string): string {
 }
 
 /**
- * Builds a YouTube-ready Shorts description (up to 5000 characters) pre-populated
- * with the clip summary, engagement CTA, context-matched trending niche tags, and viral hashtags.
+ * Builds the default YouTube Shorts description (up to 5000 characters) pre-populated
+ * with the configured viral hashtag caption, ready for editing or direct upload.
  */
 export function buildDefaultYouTubeDescription(
-  rawTitle: string,
-  rawCaption: string,
-  transcriptCues?: ReadonlyArray<{ text: string }>
+  _rawTitle: string,
+  _rawCaption: string,
+  _transcriptCues?: ReadonlyArray<{ text: string }>
 ): string {
-  const cleanTitle = normalizeWhitespace(rawTitle);
-  const cleanCaption = rawCaption.trim();
-
-  // Strip trailing inline hashtags from the caption body so we can format a clean viral hashtag block
-  const captionBody = cleanCaption
-    .replace(/(?:\s+#[A-Za-z0-9_]+)+\s*$/g, '')
-    .trim();
-
-  const suggestions = suggestViralHashtags({
-    title: cleanTitle,
-    caption: cleanCaption,
-    transcriptCues,
-  });
-
-  const blocks: string[] = [];
-  if (captionBody) {
-    blocks.push(captionBody);
-  } else if (cleanTitle) {
-    blocks.push(cleanTitle);
-  }
-  blocks.push('Watch till the end and subscribe for more viral Shorts!');
-  blocks.push(suggestions.allDescriptionHashtags.join(' '));
-
-  return blocks.join('\n\n').slice(0, YOUTUBE_DESCRIPTION_MAX_CHARS);
+  return DEFAULT_DESCRIPTION_CAPTION.slice(0, YOUTUBE_DESCRIPTION_MAX_CHARS);
 }
 
 /**
