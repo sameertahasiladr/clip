@@ -163,9 +163,11 @@ export interface RenderedClipArtifacts {
   posterPath: string | null;
 }
 
+export type ClipResolution = '720x1280' | '1080x1920' | '2160x3840';
+
 /**
  * Builds the FFmpeg filter_complex string for either:
- * - 'vertical-fill': true full-bleed 9:16 vertical center-crop filling 100% of the frame
+ * - 'vertical-fill': true full-bleed 9:16 vertical center-crop filling 100% of the 4K/HD frame
  * - 'vertical-blur': original horizontal video centered inside a 9:16 vertical frame with blurred background fill
  */
 export function buildVerticalFilterComplex(params: {
@@ -184,8 +186,9 @@ export function buildVerticalFilterComplex(params: {
   const sharpen = 'unsharp=5:5:0.45:3:3:0.0';
 
   if (videoLayout === 'vertical-blur') {
+    const blurRadius = width >= 2160 ? '36:4' : '20:3';
     return [
-      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${width}:${height},boxblur=20:3[bg]`,
+      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${width}:${height},boxblur=${blurRadius}[bg]`,
       `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=${lanczosFlags},${sharpen}[fg]`,
       `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1${subtitleFilter}[vout]`,
     ].join(';');
@@ -195,10 +198,19 @@ export function buildVerticalFilterComplex(params: {
 }
 
 /**
- * Highest-quality H.264 + AAC Shorts/Reels encoding arguments:
- * >= 8000k HD target video bitrate, High@4.2 profile, BT.709 color metadata, and 192 kbps 48 kHz audio.
+ * 4K / High-Definition H.264 + AAC Shorts/Reels encoding arguments:
+ * 20000k target bitrate (35000k maxrate) for 4K 2160x3840 at High@5.2, BT.709 color metadata, and 192 kbps 48 kHz audio.
  */
-export function buildHighQualityEncodeArgs(videoBitrate = '8000k'): string[] {
+export function buildHighQualityEncodeArgs(
+  videoBitrate = '20000k',
+  resolution: ClipResolution = '2160x3840'
+): string[] {
+  const is4K = resolution === '2160x3840';
+  const level = is4K ? '5.2' : '4.2';
+  const maxRate = is4K ? '35000k' : '12000k';
+  const bufSize = is4K ? '50000k' : '16000k';
+  const preset = is4K ? 'fast' : 'medium';
+
   return [
     '-sws_flags',
     'lanczos+accurate_rnd+full_chroma_int',
@@ -207,15 +219,15 @@ export function buildHighQualityEncodeArgs(videoBitrate = '8000k'): string[] {
     '-profile:v',
     'high',
     '-level:v',
-    '4.2',
+    level,
     '-preset',
-    'medium',
+    preset,
     '-b:v',
     videoBitrate,
     '-maxrate',
-    '12000k',
+    maxRate,
     '-bufsize',
-    '16000k',
+    bufSize,
     '-pix_fmt',
     'yuv420p',
     '-color_primaries',
@@ -237,10 +249,16 @@ export function buildHighQualityEncodeArgs(videoBitrate = '8000k'): string[] {
   ];
 }
 
+function parseResolutionDimensions(resolution: ClipResolution): [number, number] {
+  if (resolution === '720x1280') return [720, 1280];
+  if (resolution === '1080x1920') return [1080, 1920];
+  return [2160, 3840];
+}
+
 /**
  * Cuts a single moment from a local source video OR direct YouTube stream URL, converts it to
- * 1080x1920 vertical 9:16 MP4, optionally burns in bold wrapped lower-third English captions, and
- * exports high-definition H.264 (>= 8000k) + AAC MP4 plus a JPEG poster frame.
+ * 4K 2160x3840 vertical 9:16 MP4 (full-bleed vertical fill by default, or optional horizontal-in-vertical),
+ * optionally burns in bold wrapped lower-third English captions, and exports H.264 + AAC MP4 plus a JPEG poster frame.
  */
 export async function renderVerticalClip(params: {
   sourceInput: string;
@@ -253,7 +271,7 @@ export async function renderVerticalClip(params: {
   videoLayout?: VideoLayout;
   videoFilter?: string;
   videoBitrate?: string;
-  resolution?: '720x1280' | '1080x1920';
+  resolution?: ClipResolution;
 }): Promise<RenderedClipArtifacts> {
   const {
     sourceInput,
@@ -265,8 +283,8 @@ export async function renderVerticalClip(params: {
     captions,
     videoLayout = 'vertical-fill',
     videoFilter,
-    videoBitrate = '8000k',
-    resolution = '1080x1920',
+    resolution = '2160x3840',
+    videoBitrate = resolution === '2160x3840' ? '20000k' : '8000k',
   } = params;
 
   const resolvedBase = path.resolve(jobDir);
@@ -282,7 +300,7 @@ export async function renderVerticalClip(params: {
     throw new Error('Invalid clip output path.');
   }
 
-  const [width, height] = resolution === '720x1280' ? [720, 1280] : [1080, 1920];
+  const [width, height] = parseResolutionDimensions(resolution);
   const duration = Number(Math.max(1, moment.end - moment.start).toFixed(2));
   const subtitleFilename = `clip-${clipIndex + 1}.ass`;
 
@@ -332,10 +350,10 @@ export async function renderVerticalClip(params: {
       '[vout]',
       '-map',
       '0:a?',
-      ...buildHighQualityEncodeArgs(videoBitrate),
+      ...buildHighQualityEncodeArgs(videoBitrate, resolution),
       outputFilename,
     ],
-    { cwd: resolvedBase, timeout: 6 * 60_000 }
+    { cwd: resolvedBase, timeout: 10 * 60_000 }
   );
 
   await fs.access(outputPath);

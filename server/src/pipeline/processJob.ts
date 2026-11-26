@@ -27,9 +27,8 @@ const execFileAsync = promisify(execFile);
 
 export const EXPORTS_BASE_DIR = path.resolve(os.tmpdir(), 'clipgenie-exports');
 export const UPLOADS_BASE_DIR = path.resolve(os.tmpdir(), 'clipgenie-uploads');
-export const HD_VERTICAL_VIDEO_FILTER =
-  'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2';
-export const HD_TARGET_VIDEO_BITRATE = '8000k';
+export const VERTICAL_4K_RESOLUTION = '2160x3840' as const;
+export const VERTICAL_4K_TARGET_BITRATE = '20000k';
 
 function hasCloudinaryConfig(): boolean {
   return Boolean(
@@ -376,9 +375,8 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
         transcript,
         captions: job.captions,
         videoLayout: job.videoLayout,
-        videoFilter: HD_VERTICAL_VIDEO_FILTER,
-        videoBitrate: HD_TARGET_VIDEO_BITRATE,
-        resolution: '1080x1920',
+        videoBitrate: VERTICAL_4K_TARGET_BITRATE,
+        resolution: VERTICAL_4K_RESOLUTION,
       });
 
       if (useCloudinary) {

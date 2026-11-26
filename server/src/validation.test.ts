@@ -16,8 +16,8 @@ import {
   parseSubtitlesToSegments,
 } from './services/ytdlp.js';
 import {
-  HD_TARGET_VIDEO_BITRATE,
-  HD_VERTICAL_VIDEO_FILTER,
+  VERTICAL_4K_RESOLUTION,
+  VERTICAL_4K_TARGET_BITRATE,
 } from './pipeline/processJob.js';
 import {
   buildAssSubtitles,
@@ -430,46 +430,35 @@ test('viral hook scorer ranks a strong hook above generic channel intros and pic
   assert.equal(picked[0].start, 20, 'Should pick the viral hook at 20s instead of the 0s channel intro');
 });
 
-test('buildVerticalFilterComplex supports Lanczos+unsharp full vertical crop and horizontal-in-9:16 blurred fill', () => {
+test('buildVerticalFilterComplex supports 4K Lanczos+unsharp full vertical crop and horizontal-in-9:16 blurred fill', () => {
   const fillFilter = buildVerticalFilterComplex({
-    width: 1080,
-    height: 1920,
+    width: 2160,
+    height: 3840,
     videoLayout: 'vertical-fill',
     subtitleFilter: ',ass=clip-1.ass',
   });
   assert.ok(
     fillFilter.includes(
-      'scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos+accurate_rnd+full_chroma_int,crop=1080:1920,unsharp=5:5:0.45:3:3:0.0,setsar=1'
+      'scale=2160:3840:force_original_aspect_ratio=increase:flags=lanczos+accurate_rnd+full_chroma_int,crop=2160:3840,unsharp=5:5:0.45:3:3:0.0,setsar=1'
     )
   );
   assert.ok(!fillFilter.includes('boxblur'));
+  assert.ok(!fillFilter.includes('pad='));
   assert.ok(fillFilter.includes(',ass=clip-1.ass'));
 
   const blurFilter = buildVerticalFilterComplex({
-    width: 1080,
-    height: 1920,
+    width: 2160,
+    height: 3840,
     videoLayout: 'vertical-blur',
     subtitleFilter: ',ass=clip-1.ass',
   });
-  assert.ok(blurFilter.includes('boxblur=20:3[bg]'));
+  assert.ok(blurFilter.includes('boxblur=36:4[bg]'));
   assert.ok(
     blurFilter.includes(
       'force_original_aspect_ratio=decrease:flags=lanczos+accurate_rnd+full_chroma_int,unsharp=5:5:0.45:3:3:0.0[fg]'
     )
   );
   assert.ok(blurFilter.includes('[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,ass=clip-1.ass[vout]'));
-
-  const explicitPadFilter = buildVerticalFilterComplex({
-    width: 1080,
-    height: 1920,
-    videoLayout: 'vertical-fill',
-    subtitleFilter: ',ass=clip-1.ass',
-    videoFilter: HD_VERTICAL_VIDEO_FILTER,
-  });
-  assert.equal(
-    explicitPadFilter,
-    '[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,unsharp=5:5:0.35:3:3:0.0,setsar=1,ass=clip-1.ass[vout]'
-  );
 });
 
 test('SocialAccountStore enforces single-use OAuth state, hides tokens in summary, and switches Meta pages', () => {
@@ -681,10 +670,15 @@ test('extractBestStreams and yt-dlp/ffmpeg settings prioritize highest video & c
   assert.equal(isValidCookiesBrowser('chrome'), true);
   assert.equal(isValidCookiesBrowser('chrome; rm -rf /'), false);
 
-  assert.equal(HD_TARGET_VIDEO_BITRATE, '8000k');
-  const encodeArgs = buildHighQualityEncodeArgs(HD_TARGET_VIDEO_BITRATE);
-  assert.ok(encodeArgs.includes('-b:v') && encodeArgs[encodeArgs.indexOf('-b:v') + 1] === '8000k');
-  assert.ok(encodeArgs.includes('-maxrate') && encodeArgs[encodeArgs.indexOf('-maxrate') + 1] === '12000k');
+  assert.equal(VERTICAL_4K_RESOLUTION, '2160x3840');
+  assert.equal(VERTICAL_4K_TARGET_BITRATE, '20000k');
+  const encodeArgs = buildHighQualityEncodeArgs(
+    VERTICAL_4K_TARGET_BITRATE,
+    VERTICAL_4K_RESOLUTION
+  );
+  assert.ok(encodeArgs.includes('-b:v') && encodeArgs[encodeArgs.indexOf('-b:v') + 1] === '20000k');
+  assert.ok(encodeArgs.includes('-maxrate') && encodeArgs[encodeArgs.indexOf('-maxrate') + 1] === '35000k');
+  assert.ok(encodeArgs.includes('-level:v') && encodeArgs[encodeArgs.indexOf('-level:v') + 1] === '5.2');
   assert.ok(encodeArgs.includes('-profile:v') && encodeArgs[encodeArgs.indexOf('-profile:v') + 1] === 'high');
   assert.ok(encodeArgs.includes('-b:a') && encodeArgs[encodeArgs.indexOf('-b:a') + 1] === '192k');
   assert.ok(encodeArgs.includes('-ar') && encodeArgs[encodeArgs.indexOf('-ar') + 1] === '48000');

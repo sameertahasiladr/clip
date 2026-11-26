@@ -10,9 +10,9 @@ const WORKFLOW_ITEMS = [
   },
   {
     step: '02',
-    title: '9:16 Vertical Framing',
+    title: '4K 9:16 Vertical Framing',
     description:
-      'Cuts each segment to your chosen 15s or 30s target and renders 1080x1920 H.264 MP4s with a blurred-background fill and centered source frame.',
+      'Cuts each segment to your chosen 15s or 30s target and renders crisp 4K 2160x3840 H.264 MP4s in full-screen vertical or horizontal-in-vertical layout.',
     Icon: Crop,
   },
   {
@@ -25,8 +25,8 @@ const WORKFLOW_ITEMS = [
 ] as const;
 
 const EXPORT_SPECS = [
-  { label: 'Output resolution', value: '1080 x 1920 (9:16)' },
-  { label: 'Video & audio codec', value: 'H.264 + AAC MP4' },
+  { label: 'Output resolution', value: '4K 2160 x 3840 (9:16)' },
+  { label: 'Video & audio codec', value: 'H.264 High@5.2 + AAC' },
   { label: 'Clip lengths', value: '15s or 30s (±2s)' },
   { label: 'Max source length', value: 'Up to 60 minutes' },
 ] as const;
