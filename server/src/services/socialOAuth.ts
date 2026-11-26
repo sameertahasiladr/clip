@@ -33,6 +33,14 @@ export function resolvePublicAppBaseUrl(requestPortFallback = 3000): string {
   if (configured) {
     return configured;
   }
+  const renderUrl = process.env.RENDER_EXTERNAL_URL?.trim().replace(/\/+$/, '');
+  if (renderUrl) {
+    return renderUrl;
+  }
+  const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim().replace(/\/+$/, '');
+  if (railwayDomain) {
+    return railwayDomain.startsWith('http') ? railwayDomain : `https://${railwayDomain}`;
+  }
   return `http://localhost:${requestPortFallback}`;
 }
 

@@ -12,7 +12,7 @@ import { InMemoryJobStore } from './server/src/queue/jobStore.js';
 dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = 3000;
+const PORT = Number.parseInt(process.env.PORT ?? '3000', 10) || 3000;
 
 async function startServer(): Promise<void> {
   const app = express();
