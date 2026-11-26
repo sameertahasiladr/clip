@@ -412,3 +412,146 @@ export function appendViralHashtagsPack(
   }
   return next;
 }
+
+export interface CopyrightEvaluationSource {
+  title: string;
+  channelName: string;
+  channelId?: string;
+  canonicalUrl: string;
+  sourceLicense: 'youtube' | 'creativeCommon' | 'unknown';
+  category?: string;
+  hasLicensedMusicSignals: boolean;
+  audioMode: 'original' | 'mute';
+}
+
+export interface YouTubeCopyrightAssessment {
+  level: 'owned' | 'cc-by' | 'caution';
+  badgeLabel: string;
+  headline: string;
+  summary: string;
+  recommendedLicense: 'youtube' | 'creativeCommon';
+  recommendedPrivacy: 'public' | 'unlisted';
+  recommendations: string[];
+}
+
+/**
+ * Formats a clean Original Creator & License Attribution block for YouTube descriptions.
+ */
+export function buildCreatorAttributionBlock(source: CopyrightEvaluationSource): string {
+  const lines = [
+    `Original video: "${source.title}" by ${source.channelName}`,
+    `Source: ${source.canonicalUrl}`,
+  ];
+  if (source.sourceLicense === 'creativeCommon') {
+    lines.push('License: Creative Commons Attribution (CC BY) — https://creativecommons.org/licenses/by/3.0/');
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Prepends creator attribution to the description without duplicating an existing source link
+ * or exceeding YouTube's 5000-character description limit.
+ */
+export function appendAttributionSafely(
+  currentDescription: string,
+  source: CopyrightEvaluationSource
+): string {
+  const attribution = buildCreatorAttributionBlock(source);
+  if (
+    currentDescription.includes(source.canonicalUrl) ||
+    currentDescription.toLowerCase().includes('original video:')
+  ) {
+    return currentDescription;
+  }
+
+  const trimmed = currentDescription.trim();
+  if (!trimmed) {
+    return attribution.slice(0, YOUTUBE_DESCRIPTION_MAX_CHARS);
+  }
+
+  const combined = `${attribution}\n\n${trimmed}`;
+  if (combined.length <= YOUTUBE_DESCRIPTION_MAX_CHARS) {
+    return combined;
+  }
+
+  // Keep attribution intact and trim trailing hashtags only if near the 5000-char ceiling
+  const allowedTail = YOUTUBE_DESCRIPTION_MAX_CHARS - attribution.length - 2;
+  if (allowedTail <= 0) {
+    return attribution.slice(0, YOUTUBE_DESCRIPTION_MAX_CHARS);
+  }
+  return `${attribution}\n\n${trimmed.slice(0, allowedTail).trimEnd()}`;
+}
+
+/**
+ * Evaluates YouTube copyright safety based on channel ownership match, source video license
+ * (Creative Commons CC-BY vs Standard YouTube License), music-rights signals, and audio mode.
+ */
+export function evaluateYouTubeCopyrightStatus(
+  source: CopyrightEvaluationSource,
+  connectedChannelId?: string | null
+): YouTubeCopyrightAssessment {
+  const isOwnChannel = Boolean(
+    connectedChannelId && source.channelId && connectedChannelId === source.channelId
+  );
+
+  if (isOwnChannel) {
+    return {
+      level: 'owned',
+      badgeLabel: 'Your Connected Channel',
+      headline: 'Source video matches your connected YouTube channel',
+      summary: source.hasLicensedMusicSignals
+        ? 'This video belongs to your channel, though music-rights signals were detected. Confirm your music licenses cover Shorts reuse.'
+        : 'This clip comes from your own connected YouTube channel and is safe to publish under your rights.',
+      recommendedLicense: source.sourceLicense === 'creativeCommon' ? 'creativeCommon' : 'youtube',
+      recommendedPrivacy: 'public',
+      recommendations: source.hasLicensedMusicSignals
+        ? ['Double-check any third-party music licenses in YouTube Studio Checks after uploading.']
+        : ['Ready to publish directly to your YouTube channel.'],
+    };
+  }
+
+  if (source.sourceLicense === 'creativeCommon') {
+    return {
+      level: 'cc-by',
+      badgeLabel: 'Creative Commons (CC-BY)',
+      headline: `Creative Commons video by ${source.channelName}`,
+      summary:
+        'This source video is marked Creative Commons Attribution (CC-BY). Include creator credit in the description and verify there are no third-party music claims.',
+      recommendedLicense: 'creativeCommon',
+      recommendedPrivacy: 'unlisted',
+      recommendations: [
+        'Click "Insert Creator Credit" to add proper CC-BY attribution to your description.',
+        'Upload as Unlisted first so YouTube Studio Checks finishes scanning before going public.',
+      ],
+    };
+  }
+
+  const recommendations: string[] = [
+    'Only publish if you own the rights, have permission from the creator, or are making transformative fair-use content.',
+    'Upload as Unlisted or Private first so YouTube Studio\'s Checks tab can scan for copyright claims before publishing.',
+  ];
+
+  if (source.hasLicensedMusicSignals && source.audioMode !== 'mute') {
+    recommendations.unshift(
+      'Music-rights signals were detected on the source video. To avoid music Content ID claims, regenerate with "Mute Audio (Shorts Library)" and add licensed Shorts music inside YouTube Studio.'
+    );
+  } else if (source.audioMode === 'mute') {
+    recommendations.unshift(
+      'Audio was muted cleanly. After uploading, add a licensed track from the YouTube Shorts Audio Library in YouTube Studio.'
+    );
+  }
+
+  return {
+    level: 'caution',
+    badgeLabel: source.hasLicensedMusicSignals
+      ? 'Standard License · Music Detected'
+      : 'Standard YouTube License',
+    headline: `Third-party video by ${source.channelName}`,
+    summary: source.hasLicensedMusicSignals
+      ? 'Standard YouTube License with licensed music signals detected. Uploading unmodified third-party footage or music may trigger a YouTube Content ID claim or copyright strike.'
+      : 'This source video uses the Standard YouTube License. Confirm you have permission to reuse it and run YouTube Studio Copyright Checks before making it public.',
+    recommendedLicense: 'youtube',
+    recommendedPrivacy: 'unlisted',
+    recommendations,
+  };
+}

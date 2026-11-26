@@ -9,7 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import type { TranscriptSegment } from '../types.js';
+import type { TranscriptSegment, YouTubeLicenseType } from '../types.js';
 import { isValidProxyUrl } from './ytdlp.js';
 
 const execFileAsync = promisify(execFile);
@@ -40,6 +40,10 @@ export interface YouTubeVideoInfo {
   canonicalUrl: string;
   title: string;
   author: string;
+  channelId?: string;
+  sourceLicense: YouTubeLicenseType | 'unknown';
+  category?: string;
+  hasLicensedMusicSignals: boolean;
   duration: number;
   description: string;
   thumbnailUrl: string;
@@ -51,6 +55,45 @@ export interface YouTubeVideoInfo {
   cookieHeader?: string;
   botCheckBlocked: boolean;
   transcript: TranscriptSegment[];
+}
+
+/**
+ * Inspects YouTube watch HTML, description, and microformat category for legitimate
+ * licensing & music-rights indicators (Creative Commons CC-BY vs Standard YouTube License,
+ * and standard YouTube "Licensed to YouTube by" / "Provided to YouTube by" music notices).
+ */
+export function detectSourceCopyrightSignals(params: {
+  html?: string;
+  description?: string;
+  category?: string;
+}): {
+  sourceLicense: YouTubeLicenseType | 'unknown';
+  hasLicensedMusicSignals: boolean;
+} {
+  const html = params.html ?? '';
+  const description = params.description ?? '';
+  const category = (params.category ?? '').trim();
+
+  const isCreativeCommons =
+    /creativecommons\.org\/licenses\/by/i.test(html) ||
+    /Creative Commons Attribution license/i.test(html) ||
+    /Creative Commons Attribution license/i.test(description);
+
+  const sourceLicense: YouTubeLicenseType | 'unknown' = isCreativeCommons
+    ? 'creativeCommon'
+    : html.length > 0
+      ? 'youtube'
+      : 'unknown';
+
+  const hasLicensedMusicSignals =
+    category.toLowerCase() === 'music' ||
+    /Licensed to YouTube by/i.test(html) ||
+    /Licensed to YouTube by/i.test(description) ||
+    /Provided to YouTube by/i.test(description) ||
+    /Music in this video/i.test(html) ||
+    /videoAttributeViewModel/i.test(html);
+
+  return { sourceLicense, hasLicensedMusicSignals };
 }
 
 export interface ParsedNetscapeCookie {
@@ -555,9 +598,17 @@ interface InnertubePlayerData {
   videoDetails?: {
     title?: string;
     author?: string;
+    channelId?: string;
     lengthSeconds?: string;
     shortDescription?: string;
     isLiveContent?: boolean;
+  };
+  microformat?: {
+    playerMicroformatRenderer?: {
+      category?: string;
+      ownerChannelName?: string;
+      externalChannelId?: string;
+    };
   };
   captions?: {
     playerCaptionsTracklistRenderer?: {
@@ -904,8 +955,12 @@ export async function fetchYouTubeVideoInfo(
     throw new Error('Live streams cannot be clipped. Wait until the broadcast ends.');
   }
 
+  const webMicroformat = webPlayer?.microformat?.playerMicroformatRenderer ?? {};
   let title = webVideoDetails.title || oembed?.title || 'YouTube Video';
-  let author = webVideoDetails.author || oembed?.author_name || 'YouTube Creator';
+  let author =
+    webVideoDetails.author || webMicroformat.ownerChannelName || oembed?.author_name || 'YouTube Creator';
+  let channelId = webVideoDetails.channelId || webMicroformat.externalChannelId || undefined;
+  let category = webMicroformat.category || undefined;
   let duration = Number(webVideoDetails.lengthSeconds ?? 0);
   let description = webVideoDetails.shortDescription ?? '';
   let streamUrl: string | null = null;
@@ -1280,6 +1335,13 @@ export async function fetchYouTubeVideoInfo(
 
       if (data.videoDetails?.title) title = data.videoDetails.title;
       if (data.videoDetails?.author) author = data.videoDetails.author;
+      if (data.videoDetails?.channelId && !channelId) channelId = data.videoDetails.channelId;
+      if (data.microformat?.playerMicroformatRenderer?.externalChannelId && !channelId) {
+        channelId = data.microformat.playerMicroformatRenderer.externalChannelId;
+      }
+      if (data.microformat?.playerMicroformatRenderer?.category && !category) {
+        category = data.microformat.playerMicroformatRenderer.category;
+      }
       if (data.videoDetails?.lengthSeconds && Number(data.videoDetails.lengthSeconds) > 0) {
         duration = Number(data.videoDetails.lengthSeconds);
       }
@@ -1398,10 +1460,14 @@ export async function fetchYouTubeVideoInfo(
 
   const safeDuration = duration > 0 ? duration : 60;
   const chapters = parseDescriptionChapters(description);
+  const copyrightSignals = detectSourceCopyrightSignals({ html, description, category });
 
   logger.info('Fetched YouTube video info', {
     videoId,
     title,
+    channelId,
+    sourceLicense: copyrightSignals.sourceLicense,
+    hasLicensedMusicSignals: copyrightSignals.hasLicensedMusicSignals,
     duration: safeDuration,
     hasDirectStream: Boolean(streamUrl),
     streamCandidateCount: streamCandidates.length,
@@ -1415,6 +1481,10 @@ export async function fetchYouTubeVideoInfo(
     canonicalUrl,
     title,
     author,
+    channelId,
+    sourceLicense: copyrightSignals.sourceLicense,
+    category,
+    hasLicensedMusicSignals: copyrightSignals.hasLicensedMusicSignals,
     duration: safeDuration,
     description,
     thumbnailUrl,

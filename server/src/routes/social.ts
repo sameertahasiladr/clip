@@ -32,6 +32,7 @@ const publishBodySchema = z.object({
   title: z.string().trim().min(1, 'Title is required').max(120),
   caption: z.string().trim().max(5000).default(''),
   privacyStatus: z.enum(['public', 'unlisted', 'private']).default('public'),
+  license: z.enum(['youtube', 'creativeCommon']).default('youtube'),
 });
 
 const selectPageBodySchema = z.object({
@@ -284,7 +285,7 @@ export function createSocialRouter(deps: { jobStore: JobStore }): express.Router
         );
       }
 
-      const { platform, jobId, clipIndex, title, caption, privacyStatus } = parsed.data;
+      const { platform, jobId, clipIndex, title, caption, privacyStatus, license } = parsed.data;
 
       if (platform === 'youtube' && title.length > 100) {
         throw new AppError(
@@ -323,6 +324,7 @@ export function createSocialRouter(deps: { jobStore: JobStore }): express.Router
           title,
           caption,
           privacyStatus,
+          license,
         });
       } else if (platform === 'facebook') {
         result = await publishToFacebookPageReels({

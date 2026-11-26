@@ -82,6 +82,7 @@ export const createJobBodySchema = z.object({
   clipCount: z.number().int().min(1).max(MAX_CLIP_COUNT).default(3),
   captions: z.boolean().default(true),
   videoLayout: z.enum(['vertical-fill', 'vertical-blur']).default('vertical-fill'),
+  audioMode: z.enum(['original', 'mute']).default('original'),
 });
 
 export function validateCreateJobRequest(body: unknown): {
@@ -118,6 +119,7 @@ export function validateCreateJobRequest(body: unknown): {
       clipCount: parsed.data.clipCount,
       captions: parsed.data.captions,
       videoLayout: parsed.data.videoLayout,
+      audioMode: parsed.data.audioMode,
     },
   };
 }

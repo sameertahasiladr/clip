@@ -15,11 +15,13 @@ import type {
 const META_GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 
 export type YouTubePrivacyStatus = 'public' | 'unlisted' | 'private';
+export type YouTubeLicenseType = 'youtube' | 'creativeCommon';
 
 export interface PublishResult {
   platform: SocialPlatform;
   externalId: string;
   publishedUrl: string;
+  studioEditUrl?: string;
   accountLabel: string;
 }
 
@@ -198,12 +200,14 @@ export async function publishToYouTubeShorts(params: {
   title: string;
   caption: string;
   privacyStatus: YouTubePrivacyStatus;
+  license?: YouTubeLicenseType;
 }): Promise<PublishResult> {
   const activeConn = await refreshYouTubeAccessToken(params.connection);
   const { title: cleanTitle, description, tags } = formatYouTubeUploadMetadata({
     title: params.title,
     caption: params.caption,
   });
+  const uploadLicense: YouTubeLicenseType = params.license ?? 'youtube';
 
   // Step 1: Initiate resumable upload session
   const initRes = await fetch(
@@ -225,6 +229,7 @@ export async function publishToYouTubeShorts(params: {
         },
         status: {
           privacyStatus: params.privacyStatus,
+          license: uploadLicense,
           selfDeclaredMadeForKids: false,
         },
       }),
@@ -271,12 +276,14 @@ export async function publishToYouTubeShorts(params: {
     videoId: uploaded.id,
     channelId: activeConn.channelId,
     privacyStatus: params.privacyStatus,
+    license: uploadLicense,
   });
 
   return {
     platform: 'youtube',
     externalId: uploaded.id,
     publishedUrl: `https://www.youtube.com/shorts/${uploaded.id}`,
+    studioEditUrl: `https://studio.youtube.com/video/${uploaded.id}/edit`,
     accountLabel: activeConn.channelTitle,
   };
 }

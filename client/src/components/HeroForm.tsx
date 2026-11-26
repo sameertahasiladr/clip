@@ -1,6 +1,6 @@
 import type { FormEvent } from 'react';
 import { AlertCircle, ArrowRight, Link2, Loader2 } from 'lucide-react';
-import type { ClipLength, VideoLayout } from '../types';
+import type { AudioMode, ClipLength, VideoLayout } from '../types';
 import { OptionsRow } from './OptionsRow';
 
 interface HeroFormProps {
@@ -9,6 +9,7 @@ interface HeroFormProps {
   clipCount: number;
   captions: boolean;
   videoLayout: VideoLayout;
+  audioMode: AudioMode;
   validationError: string | null;
   isSubmitting: boolean;
   onUrlChange: (value: string) => void;
@@ -16,6 +17,7 @@ interface HeroFormProps {
   onClipCountChange: (count: number) => void;
   onCaptionsChange: (enabled: boolean) => void;
   onVideoLayoutChange: (layout: VideoLayout) => void;
+  onAudioModeChange: (mode: AudioMode) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }
 
@@ -25,6 +27,7 @@ export function HeroForm({
   clipCount,
   captions,
   videoLayout,
+  audioMode,
   validationError,
   isSubmitting,
   onUrlChange,
@@ -32,6 +35,7 @@ export function HeroForm({
   onClipCountChange,
   onCaptionsChange,
   onVideoLayoutChange,
+  onAudioModeChange,
   onSubmit,
 }: HeroFormProps) {
   return (
@@ -124,11 +128,13 @@ export function HeroForm({
           clipCount={clipCount}
           captions={captions}
           videoLayout={videoLayout}
+          audioMode={audioMode}
           disabled={isSubmitting}
           onClipLengthChange={onClipLengthChange}
           onClipCountChange={onClipCountChange}
           onCaptionsChange={onCaptionsChange}
           onVideoLayoutChange={onVideoLayoutChange}
+          onAudioModeChange={onAudioModeChange}
         />
       </form>
     </section>

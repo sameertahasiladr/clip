@@ -1,11 +1,25 @@
-import type { ClipResult, CreateJobInput, JobRecord, JobStatus, JobStep } from '../types.js';
+import type {
+  ClipResult,
+  CreateJobInput,
+  JobRecord,
+  JobStatus,
+  JobStep,
+  SourceCopyrightInfo,
+} from '../types.js';
 
 export interface JobStore {
   create(id: string, input: CreateJobInput): Promise<JobRecord>;
   get(id: string): Promise<JobRecord | null>;
   updateProgress(
     id: string,
-    patch: { status?: JobStatus; step?: JobStep; progress?: number; clips?: ClipResult[]; error?: string }
+    patch: {
+      status?: JobStatus;
+      step?: JobStep;
+      progress?: number;
+      clips?: ClipResult[];
+      sourceCopyright?: SourceCopyrightInfo;
+      error?: string;
+    }
   ): Promise<JobRecord | null>;
 }
 
@@ -24,6 +38,7 @@ export class InMemoryJobStore implements JobStore {
       clipCount: input.clipCount,
       captions: input.captions,
       videoLayout: input.videoLayout ?? 'vertical-fill',
+      audioMode: input.audioMode ?? 'original',
       uploadedFilePath: input.uploadedFilePath,
       sourceTitle: input.sourceTitle,
       status: 'queued',
@@ -44,7 +59,14 @@ export class InMemoryJobStore implements JobStore {
 
   async updateProgress(
     id: string,
-    patch: { status?: JobStatus; step?: JobStep; progress?: number; clips?: ClipResult[]; error?: string }
+    patch: {
+      status?: JobStatus;
+      step?: JobStep;
+      progress?: number;
+      clips?: ClipResult[];
+      sourceCopyright?: SourceCopyrightInfo;
+      error?: string;
+    }
   ): Promise<JobRecord | null> {
     const existing = this.records.get(id);
     if (!existing) return null;
@@ -55,6 +77,7 @@ export class InMemoryJobStore implements JobStore {
       step: patch.step ?? existing.step,
       progress: typeof patch.progress === 'number' ? Math.min(100, Math.max(0, Math.round(patch.progress))) : existing.progress,
       clips: patch.clips ?? existing.clips,
+      sourceCopyright: patch.sourceCopyright ?? existing.sourceCopyright,
       error: patch.error !== undefined ? patch.error : existing.error,
       updatedAt: new Date().toISOString(),
     };

@@ -2,6 +2,10 @@ export type ClipLength = 15 | 30;
 
 export type VideoLayout = 'vertical-fill' | 'vertical-blur';
 
+export type AudioMode = 'original' | 'mute';
+
+export type YouTubeLicenseType = 'youtube' | 'creativeCommon';
+
 export type JobStatus = 'queued' | 'processing' | 'done' | 'failed';
 
 export type JobStep =
@@ -19,12 +23,25 @@ export const JOB_STEPS: readonly JobStep[] = [
   'Done',
 ] as const;
 
+export interface SourceCopyrightInfo {
+  videoId: string;
+  title: string;
+  channelName: string;
+  channelId?: string;
+  canonicalUrl: string;
+  sourceLicense: YouTubeLicenseType | 'unknown';
+  category?: string;
+  hasLicensedMusicSignals: boolean;
+  audioMode: AudioMode;
+}
+
 export interface CreateJobPayload {
   url: string;
   clipLength: ClipLength;
   clipCount: number;
   captions: boolean;
   videoLayout: VideoLayout;
+  audioMode: AudioMode;
 }
 
 export interface CreateJobResponse {
@@ -58,6 +75,7 @@ export interface JobResponse {
   step: JobStep;
   progress: number;
   clips: ClipItem[];
+  sourceCopyright?: SourceCopyrightInfo;
   error?: string;
 }
 
@@ -116,6 +134,7 @@ export interface PublishClipPayload {
   title: string;
   caption: string;
   privacyStatus?: YouTubePrivacyStatus;
+  license?: YouTubeLicenseType;
 }
 
 export interface PublishClipResponse {
@@ -123,6 +142,7 @@ export interface PublishClipResponse {
   platform: SocialPlatform;
   externalId: string;
   publishedUrl: string;
+  studioEditUrl?: string;
   accountLabel: string;
 }
 

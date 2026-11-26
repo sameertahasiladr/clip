@@ -45,6 +45,7 @@ export function createApiRouter(deps: { store: JobStore; queue: ClipJobQueue }):
         clipCount: validated.data.clipCount,
         captions: validated.data.captions,
         videoLayout: validated.data.videoLayout ?? 'vertical-fill',
+        audioMode: validated.data.audioMode ?? 'original',
         queueMode: queue.mode,
       });
 
@@ -79,6 +80,7 @@ export function createApiRouter(deps: { store: JobStore; queue: ClipJobQueue }):
         const captions = req.query.captions !== 'false';
         const videoLayout =
           req.query.videoLayout === 'vertical-blur' ? 'vertical-blur' : 'vertical-fill';
+        const audioMode = req.query.audioMode === 'mute' ? 'mute' : 'original';
         const rawFilename = typeof req.query.filename === 'string' ? req.query.filename : 'Uploaded Video';
         const cleanTitle = rawFilename.replace(/\.[^.]+$/, '').replace(/[^\w\s-]/g, ' ').trim().slice(0, 80) || 'Uploaded Video';
 
@@ -102,6 +104,7 @@ export function createApiRouter(deps: { store: JobStore; queue: ClipJobQueue }):
           clipCount,
           captions,
           videoLayout,
+          audioMode,
           uploadedFilePath: uploadPath,
           sourceTitle: cleanTitle,
         });
@@ -139,6 +142,7 @@ export function createApiRouter(deps: { store: JobStore; queue: ClipJobQueue }):
         step: record.step,
         progress: record.progress,
         clips: record.clips,
+        ...(record.sourceCopyright ? { sourceCopyright: record.sourceCopyright } : {}),
         ...(record.error ? { error: record.error } : {}),
       });
     } catch (err) {

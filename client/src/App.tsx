@@ -17,12 +17,14 @@ import { ProcessingStepper } from './components/ProcessingStepper';
 import { ResultsGrid } from './components/ResultsGrid';
 import { SocialAccountsModal } from './components/SocialAccountsModal';
 import type {
+  AudioMode,
   ClipItem,
   ClipLength,
   JobStep,
   OAuthProvider,
   SocialAccountsState,
   SocialPlatform,
+  SourceCopyrightInfo,
   VideoLayout,
   YouTubePrivacyStatus,
 } from './types';
@@ -51,6 +53,7 @@ export default function App() {
   const [clipCount, setClipCount] = useState<number>(3);
   const [captions, setCaptions] = useState<boolean>(true);
   const [videoLayout, setVideoLayout] = useState<VideoLayout>('vertical-fill');
+  const [audioMode, setAudioMode] = useState<AudioMode>('original');
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const [viewState, setViewState] = useState<ViewState>('idle');
@@ -60,6 +63,7 @@ export default function App() {
   const [currentStep, setCurrentStep] = useState<JobStep>('Fetching video');
   const [progress, setProgress] = useState(0);
   const [clips, setClips] = useState<ClipItem[]>([]);
+  const [sourceCopyright, setSourceCopyright] = useState<SourceCopyrightInfo | null>(null);
   const [jobError, setJobError] = useState<string | null>(null);
 
   // Connected Social Accounts state (tokens stay strictly server-side)
@@ -199,6 +203,9 @@ export default function App() {
         const result = await getJobStatus(jobId);
         setCurrentStep(result.step);
         setProgress(result.progress);
+        if (result.sourceCopyright) {
+          setSourceCopyright(result.sourceCopyright);
+        }
 
         if (result.status === 'done') {
           stopPolling();
@@ -255,6 +262,7 @@ export default function App() {
     setCurrentStep('Fetching video');
     setJobError(null);
     setClips([]);
+    setSourceCopyright(null);
     setValidationError(null);
   };
 
@@ -285,6 +293,7 @@ export default function App() {
         clipCount: safeClipCount,
         captions,
         videoLayout,
+        audioMode,
       });
 
       setSubmittedUrl(validation.canonicalUrl);
@@ -292,6 +301,7 @@ export default function App() {
       setCurrentStep('Fetching video');
       setProgress(10);
       setClips([]);
+      setSourceCopyright(null);
       setViewState('processing');
     } catch (err) {
       const message =
@@ -328,6 +338,7 @@ export default function App() {
               clipCount={clipCount}
               captions={captions}
               videoLayout={videoLayout}
+              audioMode={audioMode}
               validationError={validationError}
               isSubmitting={isSubmitting}
               onUrlChange={handleUrlChange}
@@ -335,6 +346,7 @@ export default function App() {
               onClipCountChange={setClipCount}
               onCaptionsChange={setCaptions}
               onVideoLayoutChange={setVideoLayout}
+              onAudioModeChange={setAudioMode}
               onSubmit={handleSubmit}
             />
             <EmptyPreview />
@@ -355,6 +367,7 @@ export default function App() {
             clips={clips}
             jobId={activeJobId}
             sourceUrl={submittedUrl}
+            sourceCopyright={sourceCopyright}
             socialAccounts={socialAccounts}
             youtubePrivacy={youtubePrivacy}
             onReset={handleReset}

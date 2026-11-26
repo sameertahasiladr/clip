@@ -5,22 +5,34 @@ import {
   CheckCircle2,
   Copy,
   ExternalLink,
+  FileCheck2,
   Hash,
   Link2,
   Loader2,
+  Scale,
+  ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Upload,
   X,
   Youtube,
 } from 'lucide-react';
-import type { ClipItem, PublishClipResponse, YouTubePrivacyStatus } from '../types';
+import type {
+  ClipItem,
+  PublishClipResponse,
+  SourceCopyrightInfo,
+  YouTubeLicenseType,
+  YouTubePrivacyStatus,
+} from '../types';
 import { copyTextToClipboard } from '../utils/download';
 import { formatDuration } from '../utils/youtube';
 import {
   YOUTUBE_DESCRIPTION_MAX_CHARS,
   YOUTUBE_TITLE_MAX_CHARS,
+  appendAttributionSafely,
   appendHashtagSafely,
   appendViralHashtagsPack,
+  evaluateYouTubeCopyrightStatus,
   hasHashtag,
   suggestViralHashtags,
 } from '../utils/youtubeMetadata';
@@ -28,9 +40,12 @@ import {
 interface YouTubePublishModalProps {
   isOpen: boolean;
   clip: ClipItem;
+  sourceCopyright: SourceCopyrightInfo | null;
   title: string;
   description: string;
   privacyStatus: YouTubePrivacyStatus;
+  license: YouTubeLicenseType;
+  connectedChannelId: string | null;
   connectedChannelTitle: string | null;
   canDirectPublish: boolean;
   isPublishing: boolean;
@@ -39,6 +54,7 @@ interface YouTubePublishModalProps {
   onTitleChange: (value: string) => void;
   onDescriptionChange: (value: string) => void;
   onPrivacyChange: (value: YouTubePrivacyStatus) => void;
+  onLicenseChange: (value: YouTubeLicenseType) => void;
   onClose: () => void;
   onPublish: () => void;
   onOpenAccounts: () => void;
@@ -47,9 +63,12 @@ interface YouTubePublishModalProps {
 export function YouTubePublishModal({
   isOpen,
   clip,
+  sourceCopyright,
   title,
   description,
   privacyStatus,
+  license,
+  connectedChannelId,
   connectedChannelTitle,
   canDirectPublish,
   isPublishing,
@@ -58,11 +77,29 @@ export function YouTubePublishModal({
   onTitleChange,
   onDescriptionChange,
   onPrivacyChange,
+  onLicenseChange,
   onClose,
   onPublish,
   onOpenAccounts,
 }: YouTubePublishModalProps) {
   const [copiedField, setCopiedField] = useState<'title' | 'description' | null>(null);
+
+  const copyrightAssessment = useMemo(
+    () =>
+      sourceCopyright
+        ? evaluateYouTubeCopyrightStatus(sourceCopyright, connectedChannelId)
+        : null,
+    [sourceCopyright, connectedChannelId]
+  );
+
+  const isOwnedByConnectedChannel = copyrightAssessment?.level === 'owned';
+  const [rightsConfirmed, setRightsConfirmed] = useState(isOwnedByConnectedChannel);
+
+  useEffect(() => {
+    if (isOwnedByConnectedChannel) {
+      setRightsConfirmed(true);
+    }
+  }, [isOwnedByConnectedChannel]);
 
   const hashtagSuggestions = useMemo(
     () =>
@@ -95,7 +132,13 @@ export function YouTubePublishModal({
   const isTitleEmpty = title.trim().length === 0;
   const isTitleOverLimit = titleLen > YOUTUBE_TITLE_MAX_CHARS;
   const isDescriptionOverLimit = descriptionLen > YOUTUBE_DESCRIPTION_MAX_CHARS;
-  const isFormInvalid = isTitleEmpty || isTitleOverLimit || isDescriptionOverLimit;
+  const isFormInvalid =
+    isTitleEmpty || isTitleOverLimit || isDescriptionOverLimit || !rightsConfirmed;
+  const hasAttribution = Boolean(
+    sourceCopyright &&
+      (description.includes(sourceCopyright.canonicalUrl) ||
+        description.toLowerCase().includes('original video:'))
+  );
 
   const handleCopy = async (field: 'title' | 'description', value: string) => {
     const ok = await copyTextToClipboard(value);
@@ -155,15 +198,28 @@ export function YouTubePublishModal({
                   Published to <strong>{publishedResult.accountLabel}</strong>!
                 </span>
               </div>
-              <a
-                href={publishedResult.publishedUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/30 transition-colors"
-              >
-                <span>Open on YouTube</span>
-                <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-              </a>
+              <div className="flex flex-wrap items-center gap-2">
+                {publishedResult.studioEditUrl && (
+                  <a
+                    href={publishedResult.studioEditUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/20 transition-colors"
+                  >
+                    <FileCheck2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Check Copyright in Studio</span>
+                  </a>
+                )}
+                <a
+                  href={publishedResult.publishedUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/30 transition-colors"
+                >
+                  <span>Open on YouTube</span>
+                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                </a>
+              </div>
             </div>
           )}
 
@@ -180,6 +236,63 @@ export function YouTubePublishModal({
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_240px]">
             {/* Left column: Details form */}
             <div className="space-y-5">
+              {/* Copyright & License Safety Check */}
+              {sourceCopyright && copyrightAssessment && (
+                <div
+                  className={`rounded-xl border p-4 ${
+                    copyrightAssessment.level === 'owned'
+                      ? 'border-emerald-500/30 bg-emerald-500/[0.06]'
+                      : copyrightAssessment.level === 'cc-by'
+                        ? 'border-sky-500/30 bg-sky-500/[0.06]'
+                        : 'border-amber-500/30 bg-amber-500/[0.06]'
+                  }`}
+                >
+                  <div className="flex items-start gap-2.5">
+                    {copyrightAssessment.level === 'caution' ? (
+                      <ShieldAlert
+                        className="mt-0.5 h-4 w-4 shrink-0 text-amber-400"
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <ShieldCheck
+                        className={`mt-0.5 h-4 w-4 shrink-0 ${
+                          copyrightAssessment.level === 'owned' ? 'text-emerald-400' : 'text-sky-400'
+                        }`}
+                        aria-hidden="true"
+                      />
+                    )}
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-xs font-semibold text-white">
+                          {copyrightAssessment.headline}
+                        </p>
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                            copyrightAssessment.level === 'owned'
+                              ? 'bg-emerald-500/20 text-emerald-200'
+                              : copyrightAssessment.level === 'cc-by'
+                                ? 'bg-sky-500/20 text-sky-200'
+                                : 'bg-amber-500/20 text-amber-200'
+                          }`}
+                        >
+                          {copyrightAssessment.badgeLabel}
+                        </span>
+                      </div>
+                      <p className="text-[11px] leading-relaxed text-zinc-300">
+                        {copyrightAssessment.summary}
+                      </p>
+                      <ul className="space-y-1 pt-1 text-[11px] text-zinc-300">
+                        {copyrightAssessment.recommendations.map((tip) => (
+                          <li key={tip} className="flex items-start gap-1.5">
+                            <span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-zinc-400" />
+                            <span>{tip}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              )}
               {/* Title (required) — 100 char limit + Suggested hashtags */}
               <div
                 className={`rounded-xl border bg-[#0B0B13] p-4 transition-colors ${
@@ -354,19 +467,36 @@ export function YouTubePublishModal({
                           : ''}
                       </span>
                     </div>
-                    <button
-                      type="button"
-                      disabled={isPublishing}
-                      onClick={() =>
-                        onDescriptionChange(
-                          appendViralHashtagsPack(description, descriptionHashtagOptions)
-                        )
-                      }
-                      className="inline-flex items-center gap-1 rounded-md border border-fuchsia-500/35 bg-fuchsia-500/10 px-2.5 py-1 text-[11px] font-semibold text-fuchsia-200 hover:bg-fuchsia-500/20 transition-colors disabled:opacity-50"
-                    >
-                      <Sparkles className="h-3 w-3" aria-hidden="true" />
-                      <span>Inject Viral Hashtags</span>
-                    </button>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {sourceCopyright && (
+                        <button
+                          type="button"
+                          disabled={isPublishing || hasAttribution}
+                          onClick={() =>
+                            onDescriptionChange(
+                              appendAttributionSafely(description, sourceCopyright)
+                            )
+                          }
+                          className="inline-flex items-center gap-1 rounded-md border border-sky-500/35 bg-sky-500/10 px-2.5 py-1 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/20 transition-colors disabled:opacity-50"
+                        >
+                          <Scale className="h-3 w-3" aria-hidden="true" />
+                          <span>{hasAttribution ? 'Credit Added' : 'Insert Creator Credit'}</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={isPublishing}
+                        onClick={() =>
+                          onDescriptionChange(
+                            appendViralHashtagsPack(description, descriptionHashtagOptions)
+                          )
+                        }
+                        className="inline-flex items-center gap-1 rounded-md border border-fuchsia-500/35 bg-fuchsia-500/10 px-2.5 py-1 text-[11px] font-semibold text-fuchsia-200 hover:bg-fuchsia-500/20 transition-colors disabled:opacity-50"
+                      >
+                        <Sparkles className="h-3 w-3" aria-hidden="true" />
+                        <span>Inject Viral Hashtags</span>
+                      </button>
+                    </div>
                   </div>
 
                   <div className="mt-2 flex flex-wrap gap-1.5">
@@ -406,7 +536,7 @@ export function YouTubePublishModal({
                 <div>
                   <p className="text-xs font-semibold text-zinc-200">Visibility</p>
                   <p className="text-[11px] text-zinc-500">
-                    Choose who can watch this YouTube Short after upload
+                    Tip: Upload as Unlisted first so YouTube Studio Checks can scan copyright before publishing
                   </p>
                 </div>
                 <div
@@ -432,6 +562,59 @@ export function YouTubePublishModal({
                   ))}
                 </div>
               </div>
+
+              {/* YouTube License selector */}
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.09] bg-[#0B0B13] px-4 py-3">
+                <div>
+                  <p className="text-xs font-semibold text-zinc-200">YouTube License</p>
+                  <p className="text-[11px] text-zinc-500">
+                    Set the official YouTube license metadata sent with your Short upload
+                  </p>
+                </div>
+                <div
+                  role="group"
+                  aria-label="YouTube license type"
+                  className="inline-flex rounded-lg border border-white/[0.08] bg-[#12121C] p-0.5"
+                >
+                  {(
+                    [
+                      { value: 'youtube', label: 'Standard YouTube' },
+                      { value: 'creativeCommon', label: 'Creative Commons (CC-BY)' },
+                    ] as const
+                  ).map((item) => (
+                    <button
+                      key={item.value}
+                      type="button"
+                      disabled={isPublishing}
+                      aria-pressed={license === item.value}
+                      onClick={() => onLicenseChange(item.value)}
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                        license === item.value
+                          ? 'bg-white/[0.16] text-white'
+                          : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Rights confirmation checkbox */}
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-white/[0.09] bg-[#0B0B13] px-4 py-3 text-xs text-zinc-300">
+                <input
+                  type="checkbox"
+                  checked={rightsConfirmed}
+                  disabled={isPublishing}
+                  onChange={(e) => setRightsConfirmed(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-white/20 bg-[#12121C] accent-fuchsia-500"
+                />
+                <span className="leading-relaxed">
+                  I confirm I own the rights to this video, have permission from the copyright holder,
+                  or am publishing under a valid license (e.g., Creative Commons with attribution) or
+                  applicable fair use.
+                </span>
+              </label>
             </div>
 
             {/* Right column: Compact 9:16 video preview */}
@@ -478,7 +661,9 @@ export function YouTubePublishModal({
           <p className="text-xs text-zinc-400">
             {isTitleEmpty
               ? 'Enter a title (1–100 characters) before uploading.'
-              : `Title: ${titleLen}/${YOUTUBE_TITLE_MAX_CHARS} · Description: ${descriptionLen}/${YOUTUBE_DESCRIPTION_MAX_CHARS}`}
+              : !rightsConfirmed
+                ? 'Confirm your copyright/publishing rights above to enable upload.'
+                : `Title: ${titleLen}/${YOUTUBE_TITLE_MAX_CHARS} · Description: ${descriptionLen}/${YOUTUBE_DESCRIPTION_MAX_CHARS}`}
           </p>
 
           <div className="flex items-center gap-2.5">

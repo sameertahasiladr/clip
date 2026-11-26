@@ -183,6 +183,17 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
     await store.updateProgress(jobId, {
       step: 'Fetching video',
       progress: 20,
+      sourceCopyright: {
+        videoId,
+        title: videoInfo.title,
+        channelName: videoInfo.author,
+        channelId: videoInfo.channelId,
+        canonicalUrl,
+        sourceLicense: videoInfo.sourceLicense,
+        category: videoInfo.category,
+        hasLicensedMusicSignals: videoInfo.hasLicensedMusicSignals,
+        audioMode: job.audioMode ?? 'original',
+      },
     });
 
     // Stage 1b: Download the real YouTube video to jobDir/source.mp4 on the server
@@ -375,6 +386,7 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
         transcript,
         captions: job.captions,
         videoLayout: job.videoLayout,
+        audioMode: job.audioMode ?? 'original',
         videoBitrate: VERTICAL_4K_TARGET_BITRATE,
         resolution: VERTICAL_4K_RESOLUTION,
       });

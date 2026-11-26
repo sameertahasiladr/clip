@@ -28,6 +28,7 @@ import { InMemoryJobStore } from './queue/jobStore.js';
 import { InMemoryClipQueue } from './queue/jobQueue.js';
 import {
   buildYouTubeCookieHeaders,
+  detectSourceCopyrightSignals,
   ensureEnglishCaptionUrl,
   extractBestStreams,
   extractIpFamilyFromGoogleVideoUrl,
@@ -813,6 +814,40 @@ test('parseHlsMaxHeight, HLS stream candidate extraction, and IP family detectio
     parseBestHlsVariantUrls(evilM3u8, 'https://manifest.googlevideo.com/master.m3u8'),
     null
   );
+});
+
+test('detectSourceCopyrightSignals identifies Creative Commons, Standard License, and licensed music signals', () => {
+  const cc = detectSourceCopyrightSignals({
+    html: '<a href="https://creativecommons.org/licenses/by/3.0/">Creative Commons Attribution license</a>',
+    description: 'Open documentary footage.',
+    category: 'Education',
+  });
+  assert.equal(cc.sourceLicense, 'creativeCommon');
+  assert.equal(cc.hasLicensedMusicSignals, false);
+
+  const music = detectSourceCopyrightSignals({
+    html: '<html>Licensed to YouTube by UMG</html>',
+    description: 'Provided to YouTube by Universal Music Group',
+    category: 'Music',
+  });
+  assert.equal(music.sourceLicense, 'youtube');
+  assert.equal(music.hasLicensedMusicSignals, true);
+
+  const muteEncode = buildHighQualityEncodeArgs('20000k', '2160x3840', false);
+  assert.ok(muteEncode.includes('-an'));
+  assert.ok(!muteEncode.includes('-c:a'));
+
+  const validatedMute = validateCreateJobRequest({
+    url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    clipLength: 30,
+    clipCount: 2,
+    captions: true,
+    audioMode: 'mute',
+  });
+  assert.equal(validatedMute.success, true);
+  if (validatedMute.success) {
+    assert.equal(validatedMute.data.audioMode, 'mute');
+  }
 });
 
 

@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { MomentSelection, TranscriptSegment, VideoLayout } from '../types.js';
+import type { AudioMode, MomentSelection, TranscriptSegment, VideoLayout } from '../types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -203,13 +203,18 @@ export function buildVerticalFilterComplex(params: {
  */
 export function buildHighQualityEncodeArgs(
   videoBitrate = '20000k',
-  resolution: ClipResolution = '2160x3840'
+  resolution: ClipResolution = '2160x3840',
+  includeAudio = true
 ): string[] {
   const is4K = resolution === '2160x3840';
   const level = is4K ? '5.2' : '4.2';
   const maxRate = is4K ? '35000k' : '12000k';
   const bufSize = is4K ? '50000k' : '16000k';
   const preset = is4K ? 'fast' : 'medium';
+
+  const audioArgs = includeAudio
+    ? ['-c:a', 'aac', '-b:a', '192k', '-ar', '48000']
+    : ['-an'];
 
   return [
     '-sws_flags',
@@ -238,12 +243,7 @@ export function buildHighQualityEncodeArgs(
     'bt709',
     '-aspect',
     '9:16',
-    '-c:a',
-    'aac',
-    '-b:a',
-    '192k',
-    '-ar',
-    '48000',
+    ...audioArgs,
     '-movflags',
     '+faststart',
   ];
@@ -269,6 +269,7 @@ export async function renderVerticalClip(params: {
   transcript: TranscriptSegment[];
   captions: boolean;
   videoLayout?: VideoLayout;
+  audioMode?: AudioMode;
   videoFilter?: string;
   videoBitrate?: string;
   resolution?: ClipResolution;
@@ -282,6 +283,7 @@ export async function renderVerticalClip(params: {
     transcript,
     captions,
     videoLayout = 'vertical-fill',
+    audioMode = 'original',
     videoFilter,
     resolution = '2160x3840',
     videoBitrate = resolution === '2160x3840' ? '20000k' : '8000k',
@@ -334,6 +336,8 @@ export async function renderVerticalClip(params: {
     inputArgs.push('-user_agent', userAgent);
   }
 
+  const includeAudio = audioMode !== 'mute';
+
   await execFileAsync(
     'ffmpeg',
     [
@@ -348,9 +352,8 @@ export async function renderVerticalClip(params: {
       filterComplex,
       '-map',
       '[vout]',
-      '-map',
-      '0:a?',
-      ...buildHighQualityEncodeArgs(videoBitrate, resolution),
+      ...(includeAudio ? ['-map', '0:a?'] : []),
+      ...buildHighQualityEncodeArgs(videoBitrate, resolution, includeAudio),
       outputFilename,
     ],
     { cwd: resolvedBase, timeout: 10 * 60_000 }

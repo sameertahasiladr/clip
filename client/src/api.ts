@@ -1,4 +1,5 @@
 import type {
+  AudioMode,
   ClipItem,
   CreateJobPayload,
   CreateJobResponse,
@@ -261,10 +262,12 @@ export interface CreateUploadJobPayload {
   clipCount: number;
   captions: boolean;
   videoLayout?: VideoLayout;
+  audioMode?: AudioMode;
 }
 
 export async function createUploadJob(payload: CreateUploadJobPayload): Promise<CreateJobResponse> {
   const videoLayout = payload.videoLayout ?? 'vertical-fill';
+  const audioMode = payload.audioMode ?? 'original';
   if (isMockMode()) {
     const jobId = generateLocalJobId();
     mockJobs.set(jobId, {
@@ -275,6 +278,7 @@ export async function createUploadJob(payload: CreateUploadJobPayload): Promise<
         clipCount: payload.clipCount,
         captions: payload.captions,
         videoLayout,
+        audioMode,
       },
       videoId: 'uploaddemo0',
       pollCount: 0,
@@ -289,6 +293,7 @@ export async function createUploadJob(payload: CreateUploadJobPayload): Promise<
     clipCount: String(payload.clipCount),
     captions: String(payload.captions),
     videoLayout,
+    audioMode,
     filename: payload.file.name,
   });
 
@@ -351,6 +356,7 @@ export async function getJobStatus(jobId: string): Promise<JobResponse> {
     step: data.step ?? 'Fetching video',
     progress: typeof data.progress === 'number' ? data.progress : 0,
     clips: Array.isArray(data.clips) ? data.clips : [],
+    sourceCopyright: data.sourceCopyright,
     error: data.error,
   };
 }
@@ -513,6 +519,7 @@ export async function publishClipToSocial(
     platform: payload.platform,
     externalId: data.externalId,
     publishedUrl: data.publishedUrl,
+    studioEditUrl: data.studioEditUrl,
     accountLabel: data.accountLabel ?? payload.platform,
   };
 }

@@ -1,11 +1,24 @@
-import { Link2, RotateCcw } from 'lucide-react';
-import type { ClipItem, SocialAccountsState, YouTubePrivacyStatus } from '../types';
+import {
+  Link2,
+  RotateCcw,
+  ShieldAlert,
+  ShieldCheck,
+  VolumeX,
+} from 'lucide-react';
+import type {
+  ClipItem,
+  SocialAccountsState,
+  SourceCopyrightInfo,
+  YouTubePrivacyStatus,
+} from '../types';
+import { evaluateYouTubeCopyrightStatus } from '../utils/youtubeMetadata';
 import { ClipCard } from './ClipCard';
 
 interface ResultsGridProps {
   clips: ClipItem[];
   jobId: string | null;
   sourceUrl: string;
+  sourceCopyright: SourceCopyrightInfo | null;
   socialAccounts: SocialAccountsState | null;
   youtubePrivacy: YouTubePrivacyStatus;
   onReset: () => void;
@@ -16,11 +29,16 @@ export function ResultsGrid({
   clips,
   jobId,
   sourceUrl,
+  sourceCopyright,
   socialAccounts,
   youtubePrivacy,
   onReset,
   onOpenAccounts,
 }: ResultsGridProps) {
+  const copyrightAssessment = sourceCopyright
+    ? evaluateYouTubeCopyrightStatus(sourceCopyright, socialAccounts?.youtube?.channelId)
+    : null;
+
   return (
     <section aria-label="Generated clips" className="mx-auto max-w-6xl py-8 sm:py-12">
       <div className="flex flex-col gap-4 border-b border-white/[0.08] pb-6 sm:flex-row sm:items-end sm:justify-between">
@@ -57,6 +75,70 @@ export function ResultsGrid({
         </div>
       </div>
 
+      {sourceCopyright && copyrightAssessment && (
+        <div
+          data-testid="copyright-summary-banner"
+          className={`mt-6 rounded-2xl border p-4 sm:p-5 ${
+            copyrightAssessment.level === 'owned'
+              ? 'border-emerald-500/30 bg-emerald-500/[0.07]'
+              : copyrightAssessment.level === 'cc-by'
+                ? 'border-sky-500/30 bg-sky-500/[0.07]'
+                : 'border-amber-500/30 bg-amber-500/[0.07]'
+          }`}
+        >
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-3">
+              {copyrightAssessment.level === 'caution' ? (
+                <ShieldAlert
+                  className="mt-0.5 h-5 w-5 shrink-0 text-amber-400"
+                  aria-hidden="true"
+                />
+              ) : (
+                <ShieldCheck
+                  className={`mt-0.5 h-5 w-5 shrink-0 ${
+                    copyrightAssessment.level === 'owned' ? 'text-emerald-400' : 'text-sky-400'
+                  }`}
+                  aria-hidden="true"
+                />
+              )}
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-white">
+                    YouTube Copyright &amp; License Check
+                  </h3>
+                  <span
+                    className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${
+                      copyrightAssessment.level === 'owned'
+                        ? 'bg-emerald-500/20 text-emerald-200'
+                        : copyrightAssessment.level === 'cc-by'
+                          ? 'bg-sky-500/20 text-sky-200'
+                          : 'bg-amber-500/20 text-amber-200'
+                    }`}
+                  >
+                    {copyrightAssessment.badgeLabel}
+                  </span>
+                  {sourceCopyright.audioMode === 'mute' && (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-white/[0.08] px-2 py-0.5 text-[11px] font-medium text-zinc-200">
+                      <VolumeX className="h-3 w-3 text-fuchsia-300" aria-hidden="true" />
+                      Muted for Shorts Audio Library
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-zinc-300">
+                  {copyrightAssessment.summary}
+                </p>
+              </div>
+            </div>
+            <div className="shrink-0 text-xs text-zinc-400 sm:text-right">
+              <p className="font-medium text-zinc-200">{sourceCopyright.channelName}</p>
+              {sourceCopyright.category && (
+                <p className="text-[11px] text-zinc-400">Category: {sourceCopyright.category}</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {clips.length === 0 ? (
         <div className="mt-8 rounded-2xl border border-white/[0.08] bg-[#12121C] p-10 text-center">
           <h3 className="text-lg font-semibold text-white">No moments matched your settings</h3>
@@ -82,6 +164,7 @@ export function ResultsGrid({
               clip={clip}
               index={index}
               jobId={jobId}
+              sourceCopyright={sourceCopyright}
               socialAccounts={socialAccounts}
               youtubePrivacy={youtubePrivacy}
               onOpenAccounts={onOpenAccounts}

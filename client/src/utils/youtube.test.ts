@@ -11,9 +11,12 @@ import {
   DEFAULT_DESCRIPTION_CAPTION,
   YOUTUBE_DESCRIPTION_MAX_CHARS,
   YOUTUBE_TITLE_MAX_CHARS,
+  appendAttributionSafely,
   appendHashtagSafely,
+  buildCreatorAttributionBlock,
   buildDefaultYouTubeDescription,
   buildDefaultYouTubeTitle,
+  evaluateYouTubeCopyrightStatus,
   suggestViralHashtags,
 } from './youtubeMetadata';
 
@@ -126,6 +129,64 @@ test('suggestViralHashtags recommends context-matched niche, topic, and viral ha
   assert.equal(fitnessResult.detectedNiche, 'Fitness & Health');
   assert.ok(fitnessResult.nicheHashtags.includes('#FitnessShorts'));
   assert.ok(fitnessResult.allDescriptionHashtags.includes('#WorkoutTips'));
+});
+
+test('evaluateYouTubeCopyrightStatus and appendAttributionSafely classify ownership, CC-BY, and music caution', () => {
+  const owned = evaluateYouTubeCopyrightStatus(
+    {
+      title: 'My Vlog Episode 1',
+      channelName: 'Creator Channel',
+      channelId: 'UC_OWN_123',
+      canonicalUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      sourceLicense: 'youtube',
+      hasLicensedMusicSignals: false,
+      audioMode: 'original',
+    },
+    'UC_OWN_123'
+  );
+  assert.equal(owned.level, 'owned');
+  assert.equal(owned.recommendedPrivacy, 'public');
+
+  const ccSource = {
+    title: 'Open Documentary Clip',
+    channelName: 'Open Archive',
+    channelId: 'UC_OTHER_999',
+    canonicalUrl: 'https://www.youtube.com/watch?v=abcDEF_1234',
+    sourceLicense: 'creativeCommon' as const,
+    hasLicensedMusicSignals: false,
+    audioMode: 'original' as const,
+  };
+  const ccAssessment = evaluateYouTubeCopyrightStatus(ccSource, 'UC_OWN_123');
+  assert.equal(ccAssessment.level, 'cc-by');
+  assert.equal(ccAssessment.recommendedLicense, 'creativeCommon');
+
+  const creditBlock = buildCreatorAttributionBlock(ccSource);
+  assert.ok(creditBlock.includes('Original video: "Open Documentary Clip" by Open Archive'));
+  assert.ok(creditBlock.includes('Creative Commons Attribution'));
+
+  const withCredit = appendAttributionSafely(DEFAULT_DESCRIPTION_CAPTION, ccSource);
+  assert.ok(withCredit.includes(ccSource.canonicalUrl));
+  assert.ok(withCredit.includes('#morningpost'));
+  assert.ok(withCredit.length <= YOUTUBE_DESCRIPTION_MAX_CHARS);
+  // Idempotent: calling twice does not duplicate credit
+  assert.equal(appendAttributionSafely(withCredit, ccSource), withCredit);
+
+  const musicCaution = evaluateYouTubeCopyrightStatus(
+    {
+      title: 'Official Music Video',
+      channelName: 'Record Label',
+      channelId: 'UC_LABEL_1',
+      canonicalUrl: 'https://www.youtube.com/watch?v=xyz123-_ABC',
+      sourceLicense: 'youtube',
+      category: 'Music',
+      hasLicensedMusicSignals: true,
+      audioMode: 'original',
+    },
+    'UC_OWN_123'
+  );
+  assert.equal(musicCaution.level, 'caution');
+  assert.equal(musicCaution.recommendedPrivacy, 'unlisted');
+  assert.ok(musicCaution.recommendations.some((r) => r.includes('Mute Audio')));
 });
 
 

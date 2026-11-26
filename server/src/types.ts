@@ -2,6 +2,10 @@ export type ClipLength = 15 | 30;
 
 export type VideoLayout = 'vertical-fill' | 'vertical-blur';
 
+export type AudioMode = 'original' | 'mute';
+
+export type YouTubeLicenseType = 'youtube' | 'creativeCommon';
+
 export type JobStatus = 'queued' | 'processing' | 'done' | 'failed';
 
 export type JobStep =
@@ -11,12 +15,25 @@ export type JobStep =
   | 'Cutting and formatting'
   | 'Done';
 
+export interface SourceCopyrightInfo {
+  videoId: string;
+  title: string;
+  channelName: string;
+  channelId?: string;
+  canonicalUrl: string;
+  sourceLicense: YouTubeLicenseType | 'unknown';
+  category?: string;
+  hasLicensedMusicSignals: boolean;
+  audioMode: AudioMode;
+}
+
 export interface CreateJobInput {
   url: string;
   clipLength: ClipLength;
   clipCount: number;
   captions: boolean;
   videoLayout?: VideoLayout;
+  audioMode?: AudioMode;
   uploadedFilePath?: string;
   sourceTitle?: string;
 }
@@ -50,6 +67,8 @@ export interface JobRecord {
   clipCount: number;
   captions: boolean;
   videoLayout: VideoLayout;
+  audioMode: AudioMode;
+  sourceCopyright?: SourceCopyrightInfo;
   uploadedFilePath?: string;
   sourceTitle?: string;
   status: JobStatus;

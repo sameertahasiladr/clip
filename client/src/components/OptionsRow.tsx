@@ -7,8 +7,10 @@ import {
   Plus,
   RectangleHorizontal,
   Smartphone,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
-import type { ClipLength, VideoLayout } from '../types';
+import type { AudioMode, ClipLength, VideoLayout } from '../types';
 
 export const MIN_CLIP_COUNT = 1;
 export const MAX_CLIP_COUNT = 20;
@@ -18,11 +20,13 @@ interface OptionsRowProps {
   clipCount: number;
   captions: boolean;
   videoLayout: VideoLayout;
+  audioMode: AudioMode;
   disabled?: boolean;
   onClipLengthChange: (length: ClipLength) => void;
   onClipCountChange: (count: number) => void;
   onCaptionsChange: (enabled: boolean) => void;
   onVideoLayoutChange: (layout: VideoLayout) => void;
+  onAudioModeChange: (mode: AudioMode) => void;
 }
 
 const CLIP_LENGTH_OPTIONS: readonly ClipLength[] = [15, 30];
@@ -44,16 +48,35 @@ const VIDEO_LAYOUT_OPTIONS: ReadonlyArray<{
   },
 ];
 
+const AUDIO_MODE_OPTIONS: ReadonlyArray<{
+  value: AudioMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'original',
+    label: 'Original Audio',
+    description: 'Keep the source video audio track',
+  },
+  {
+    value: 'mute',
+    label: 'Mute Audio (Shorts Library)',
+    description: 'Export silent 4K clips so you can add licensed YouTube Shorts Library music safely',
+  },
+];
+
 export function OptionsRow({
   clipLength,
   clipCount,
   captions,
   videoLayout,
+  audioMode,
   disabled = false,
   onClipLengthChange,
   onClipCountChange,
   onCaptionsChange,
   onVideoLayoutChange,
+  onAudioModeChange,
 }: OptionsRowProps) {
   const [draftCount, setDraftCount] = useState(String(clipCount));
 
@@ -239,6 +262,47 @@ export function OptionsRow({
             />
           </span>
         </button>
+      </div>
+
+      {/* 5. Audio track copyright mode: Original vs Mute for YouTube Shorts Audio Library */}
+      <div className="flex flex-col gap-2 sm:col-span-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-medium text-zinc-400">
+          <span className="flex items-center gap-1.5">
+            <Volume2 className="h-3.5 w-3.5 text-zinc-500" aria-hidden="true" />
+            Audio track (YouTube copyright safety)
+          </span>
+          <span className="text-[11px] text-zinc-500">
+            Mute removes copyrighted music so you can add licensed Shorts Audio Library tracks
+          </span>
+        </div>
+        <div
+          role="group"
+          aria-label="Audio track mode"
+          className="inline-flex w-full rounded-lg bg-[#0C0C14] p-1 border border-white/[0.08]"
+        >
+          {AUDIO_MODE_OPTIONS.map((option) => {
+            const active = audioMode === option.value;
+            const Icon = option.value === 'original' ? Volume2 : VolumeX;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                disabled={disabled}
+                aria-pressed={active}
+                title={option.description}
+                onClick={() => onAudioModeChange(option.value)}
+                className={`flex-1 inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs sm:text-sm font-semibold transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400 disabled:opacity-50 ${
+                  active
+                    ? 'bg-white/[0.14] text-white'
+                    : 'text-zinc-400 hover:text-zinc-100'
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span>{option.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

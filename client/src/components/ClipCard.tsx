@@ -20,6 +20,8 @@ import type {
   PublishClipResponse,
   SocialAccountsState,
   SocialPlatform,
+  SourceCopyrightInfo,
+  YouTubeLicenseType,
   YouTubePrivacyStatus,
 } from '../types';
 import {
@@ -40,6 +42,7 @@ interface ClipCardProps {
   clip: ClipItem;
   index: number;
   jobId: string | null;
+  sourceCopyright: SourceCopyrightInfo | null;
   socialAccounts: SocialAccountsState | null;
   youtubePrivacy: YouTubePrivacyStatus;
   onOpenAccounts: () => void;
@@ -73,6 +76,7 @@ export function ClipCard({
   clip,
   index,
   jobId,
+  sourceCopyright,
   socialAccounts,
   youtubePrivacy,
   onOpenAccounts,
@@ -93,6 +97,9 @@ export function ClipCard({
   );
   const [clipYoutubePrivacy, setClipYoutubePrivacy] =
     useState<YouTubePrivacyStatus>(youtubePrivacy);
+  const [clipYoutubeLicense, setClipYoutubeLicense] = useState<YouTubeLicenseType>(() =>
+    sourceCopyright?.sourceLicense === 'creativeCommon' ? 'creativeCommon' : 'youtube'
+  );
 
   useEffect(() => {
     setClipYoutubePrivacy(youtubePrivacy);
@@ -137,7 +144,12 @@ export function ClipCard({
 
   const executePublish = async (
     platform: SocialPlatform,
-    overrides?: { title: string; caption: string; privacyStatus?: YouTubePrivacyStatus }
+    overrides?: {
+      title: string;
+      caption: string;
+      privacyStatus?: YouTubePrivacyStatus;
+      license?: YouTubeLicenseType;
+    }
   ) => {
     if (!jobId) return;
     setPublishError(null);
@@ -152,6 +164,8 @@ export function ClipCard({
         caption: overrides?.caption ?? youtubeDescription,
         privacyStatus:
           platform === 'youtube' ? (overrides?.privacyStatus ?? clipYoutubePrivacy) : undefined,
+        license:
+          platform === 'youtube' ? (overrides?.license ?? clipYoutubeLicense) : undefined,
       });
       setPublishedResults((prev) => ({ ...prev, [platform]: result }));
     } catch (err) {
@@ -403,9 +417,12 @@ export function ClipCard({
       <YouTubePublishModal
         isOpen={isYouTubeModalOpen}
         clip={clip}
+        sourceCopyright={sourceCopyright}
         title={youtubeTitle}
         description={youtubeDescription}
         privacyStatus={clipYoutubePrivacy}
+        license={clipYoutubeLicense}
+        connectedChannelId={socialAccounts?.youtube?.channelId ?? null}
         connectedChannelTitle={socialAccounts?.youtube?.channelTitle ?? null}
         canDirectPublish={Boolean(isPlatformConnected('youtube') && jobId)}
         isPublishing={publishingPlatform === 'youtube'}
@@ -414,12 +431,14 @@ export function ClipCard({
         onTitleChange={setYoutubeTitle}
         onDescriptionChange={setYoutubeDescription}
         onPrivacyChange={setClipYoutubePrivacy}
+        onLicenseChange={setClipYoutubeLicense}
         onClose={() => setIsYouTubeModalOpen(false)}
         onPublish={() =>
           void executePublish('youtube', {
             title: youtubeTitle,
             caption: youtubeDescription,
             privacyStatus: clipYoutubePrivacy,
+            license: clipYoutubeLicense,
           })
         }
         onOpenAccounts={onOpenAccounts}
