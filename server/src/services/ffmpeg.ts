@@ -179,7 +179,7 @@ export function buildVerticalFilterComplex(params: {
 }): string {
   const { width, height, videoLayout, subtitleFilter, videoFilter } = params;
   if (videoFilter) {
-    return `[0:v]${videoFilter},unsharp=5:5:0.45:3:3:0.0,setsar=1,setdar=9/16${subtitleFilter}[vout]`;
+    return `[0:v]${videoFilter},cas=strength=0.4,setsar=1,setdar=9/16${subtitleFilter}[vout]`;
   }
 
   const lanczosFlags = 'lanczos+accurate_rnd+full_chroma_int';
@@ -189,17 +189,17 @@ export function buildVerticalFilterComplex(params: {
     const blurRadius = width >= 2160 ? '36:4' : '20:3';
     return [
       `[0:v]${cropTo9x16},scale=${width}:${height}:flags=lanczos,boxblur=${blurRadius}[bg]`,
-      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=${lanczosFlags},unsharp=5:5:0.55:3:3:0.0[fg]`,
+      `[0:v]hqdn3d=1.2:1.2:3:3,scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=${lanczosFlags},cas=strength=0.4[fg]`,
       `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,setdar=9/16${subtitleFilter}[vout]`,
     ].join(';');
   }
 
-  return `[0:v]${cropTo9x16},scale=${width}:${height}:flags=${lanczosFlags},unsharp=5:5:0.6:3:3:0.0,setsar=1,setdar=9/16${subtitleFilter}[vout]`;
+  return `[0:v]${cropTo9x16},hqdn3d=1.2:1.2:3:3,scale=${width}:${height}:flags=${lanczosFlags},cas=strength=0.45,setsar=1,setdar=9/16${subtitleFilter}[vout]`;
 }
 
 /**
  * YouTube 4K UHD (2160x3840, portrait 9:16 equivalent of 3840x2160) H.264 + AAC encoding arguments:
- * Visually-lossless CRF 15 with 50 Mbps VBV ceiling (High@5.2, closed GOP, 2 B-frames, AQ mode 3,
+ * Visually-lossless CRF 14 with 60 Mbps VBV ceiling (High@5.2, closed GOP, 2 B-frames, AQ mode 3,
  * BT.709 color metadata, square SAR / 9:16 DAR, and 320 kbps 48 kHz AAC audio).
  */
 export function buildHighQualityEncodeArgs(
@@ -209,9 +209,9 @@ export function buildHighQualityEncodeArgs(
 ): string[] {
   const is4K = resolution === '2160x3840';
   const level = is4K ? '5.2' : '4.2';
-  const crf = is4K ? '15' : '16';
+  const crf = is4K ? '14' : '15';
   const requestedKbps = Number.parseInt(videoBitrate.replace(/[^\d]/g, ''), 10) || (is4K ? 35000 : 10000);
-  const maxRateKbps = is4K ? Math.max(50000, requestedKbps) : Math.max(16000, requestedKbps);
+  const maxRateKbps = is4K ? Math.max(60000, requestedKbps) : Math.max(18000, requestedKbps);
   const bufSizeKbps = Math.round(maxRateKbps * 1.5);
   const preset = is4K ? 'fast' : 'medium';
 
@@ -236,12 +236,16 @@ export function buildHighQualityEncodeArgs(
     `${maxRateKbps}k`,
     '-bufsize',
     `${bufSizeKbps}k`,
+    '-g',
+    '60',
+    '-keyint_min',
+    '30',
     '-bf',
     '2',
     '-flags',
     '+cgop',
     '-x264-params',
-    'aq-mode=3:aq-strength=1.05:deblock=-1,-1',
+    'aq-mode=3:aq-strength=1.1:deblock=-1,-1:rc-lookahead=40',
     '-pix_fmt',
     'yuv420p',
     '-color_primaries',

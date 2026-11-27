@@ -563,28 +563,27 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
         outputBitrateKbps,
       });
 
+      let clipVideoUrl: string;
+      let clipPosterUrl: string | undefined = thumbnailUrl;
+
       if (useCloudinary) {
-        const videoUrl = await uploadClipToCloudinary(artifacts.videoPath, jobId, index);
-        clips.push({
-          id: `${jobId}-clip-${index + 1}`,
-          title: moment.title,
-          videoUrl,
-          posterUrl: thumbnailUrl,
-          videoId,
-          playbackMode: 'mp4',
-          duration,
-          score: moment.score,
-          caption: moment.caption,
-          captionsEnabled: job.captions,
-          captionCues: relativeCues,
-          startTime: Math.floor(moment.start),
-          endTime: Math.ceil(moment.end),
-          width: outputWidth,
-          height: outputHeight,
-          bitrateKbps: outputBitrateKbps,
-          sourceWidth: sourceWidth || undefined,
-          sourceHeight: sourceHeight || undefined,
-        });
+        try {
+          clipVideoUrl = await uploadClipToCloudinary(artifacts.videoPath, jobId, index);
+        } catch (cloudErr) {
+          logger.warn('Cloudinary 4K upload failed; serving full 4K clip locally instead', {
+            jobId,
+            clipIndex: index + 1,
+            reason: cloudErr instanceof Error ? cloudErr.message : 'unknown',
+          });
+          const exported = await persistLocalClipExport(
+            jobId,
+            index,
+            artifacts.videoPath,
+            artifacts.posterPath
+          );
+          clipVideoUrl = exported.videoUrl;
+          clipPosterUrl = exported.posterUrl ?? thumbnailUrl;
+        }
       } else {
         const exported = await persistLocalClipExport(
           jobId,
@@ -592,27 +591,30 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
           artifacts.videoPath,
           artifacts.posterPath
         );
-        clips.push({
-          id: `${jobId}-clip-${index + 1}`,
-          title: moment.title,
-          videoUrl: exported.videoUrl,
-          posterUrl: exported.posterUrl ?? thumbnailUrl,
-          videoId,
-          playbackMode: 'mp4',
-          duration,
-          score: moment.score,
-          caption: moment.caption,
-          captionsEnabled: job.captions,
-          captionCues: relativeCues,
-          startTime: Math.floor(moment.start),
-          endTime: Math.ceil(moment.end),
-          width: outputWidth,
-          height: outputHeight,
-          bitrateKbps: outputBitrateKbps,
-          sourceWidth: sourceWidth || undefined,
-          sourceHeight: sourceHeight || undefined,
-        });
+        clipVideoUrl = exported.videoUrl;
+        clipPosterUrl = exported.posterUrl ?? thumbnailUrl;
       }
+
+      clips.push({
+        id: `${jobId}-clip-${index + 1}`,
+        title: moment.title,
+        videoUrl: clipVideoUrl,
+        posterUrl: clipPosterUrl,
+        videoId,
+        playbackMode: 'mp4',
+        duration,
+        score: moment.score,
+        caption: moment.caption,
+        captionsEnabled: job.captions,
+        captionCues: relativeCues,
+        startTime: Math.floor(moment.start),
+        endTime: Math.ceil(moment.end),
+        width: outputWidth,
+        height: outputHeight,
+        bitrateKbps: outputBitrateKbps,
+        sourceWidth: sourceWidth || undefined,
+        sourceHeight: sourceHeight || undefined,
+      });
 
       const clipProgress = 78 + Math.round(((index + 1) / totalMoments) * 19);
       await store.updateProgress(jobId, {

@@ -154,11 +154,15 @@ export function ResultsGrid({
           <span className="font-semibold text-amber-200">
             Low-resolution YouTube source detected ({clips[0].sourceWidth ?? '?'}×{clips[0].sourceHeight}):
           </span>{' '}
-          Your clip was exported at 4K ({clips[0].width ?? 2160}×{clips[0].height ?? 3840}), but YouTube only served a {clips[0].sourceHeight}p source stream. For crisp native 4K quality, run{' '}
+          Your clip was exported at 4K ({clips[0].width ?? 2160}×{clips[0].height ?? 3840}), but YouTube restricted the source download to {clips[0].sourceHeight}p. To unlock native 4K/1080p YouTube downloads on your local server, run{' '}
           <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">
             yt-dlp -U
           </code>{' '}
-          on your local server and restart it, or choose a video uploaded in 1080p/4K.
+          and set{' '}
+          <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">
+            YTDLP_COOKIES_FROM_BROWSER=chrome
+          </code>{' '}
+          (or <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">edge</code>) in <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">server/.env</code>, then restart the server.
         </div>
       )}
 

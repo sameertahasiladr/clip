@@ -151,10 +151,14 @@ async function execYtDlp(
   return execFileAsync(cmd.bin, [...cmd.prefixArgs, ...args], options);
 }
 
-async function buildYtDlpBaseArgs(jobDir?: string): Promise<string[]> {
+async function buildYtDlpBaseArgs(
+  jobDir?: string,
+  options?: { forceIpv4?: boolean }
+): Promise<string[]> {
   const cmd = await resolveYtDlpCommand();
+  const forceIpv4 = options?.forceIpv4 ?? true;
   const args = [
-    '--force-ipv4',
+    ...(forceIpv4 ? ['--force-ipv4'] : []),
     '--no-playlist',
     '--no-warnings',
     '--retries',
@@ -168,7 +172,9 @@ async function buildYtDlpBaseArgs(jobDir?: string): Promise<string[]> {
   // Enable Node.js JS challenge solver (EJS) automatically when yt-dlp supports it so
   // YouTube serves full 1080p/1440p/4K formats instead of returning HTTP 403 or 360p-only.
   if (cmd?.supportsJsRuntimes) {
-    args.push('--js-runtimes', `node:${process.execPath}`);
+    // On Windows avoid embedding spaces/drive-letter colons (C:\Program Files\...) in RUNTIME:PATH
+    const jsRuntimeArg = process.platform === 'win32' ? 'node' : `node:${process.execPath}`;
+    args.push('--js-runtimes', jsRuntimeArg);
   }
   if (cmd?.supportsRemoteComponents) {
     args.push('--remote-components', 'ejs:github');
@@ -243,6 +249,7 @@ export const YTDLP_DOWNLOAD_STRATEGIES: ReadonlyArray<{
   extraArgs: string[];
   format: string;
   sort: string;
+  forceIpv4?: boolean;
   isLowResFallback?: boolean;
 }> = [
   {
@@ -253,37 +260,52 @@ export const YTDLP_DOWNLOAD_STRATEGIES: ReadonlyArray<{
     sort: YTDLP_QUALITY_SORT,
   },
   {
-    // 2. Android VR + Smart TV adaptive streams — serves true 4K 2160p VP9/AV1 without PO-token 403s
+    // 2. Pure Android VR client — serves true 4K 2160p VP9/AV1 adaptive streams without web PO-token 403s
     name: 'android_vr-4k',
-    extraArgs: ['--extractor-args', 'youtube:player_client=android_vr,tv'],
+    extraArgs: ['--extractor-args', 'youtube:player_client=android_vr'],
     format: YTDLP_HD_QUALITY_FORMAT,
     sort: YTDLP_QUALITY_SORT,
   },
   {
-    // 3. Safari + TV HLS streams (1080p/4K HLS bypasses HTTPS adaptive GVS PO-token 403s)
+    // 3. Smart TV client — serves true 4K 2160p/1440p/1080p adaptive streams
+    name: 'tv-4k',
+    extraArgs: ['--extractor-args', 'youtube:player_client=tv'],
+    format: YTDLP_HD_QUALITY_FORMAT,
+    sort: YTDLP_QUALITY_SORT,
+  },
+  {
+    // 4. Safari HLS + adaptive fallback (bypasses HTTPS adaptive GVS PO-token 403s without clearing EJS cache)
     name: 'web_safari-hls-hd',
-    extraArgs: ['--rm-cache-dir', '--extractor-args', 'youtube:player_client=web_safari,tv'],
+    extraArgs: ['--extractor-args', 'youtube:player_client=web_safari'],
     format:
       'bestvideo[height>=1080][protocol^=m3u8]+bestaudio[protocol^=m3u8]/bestvideo[height>=720][protocol^=m3u8]+bestaudio[protocol^=m3u8]/bestvideo[height>=720]+bestaudio/best[height>=720]',
     sort: YTDLP_QUALITY_SORT,
   },
   {
-    // 4. iOS + TV HLS streams (1080p/4K HLS fallback)
+    // 5. iOS HLS streams (1080p/4K HLS fallback)
     name: 'ios-hls-hd',
-    extraArgs: ['--extractor-args', 'youtube:player_client=ios,tv'],
+    extraArgs: ['--extractor-args', 'youtube:player_client=ios'],
     format:
       'bestvideo[height>=1080][protocol^=m3u8]+bestaudio[protocol^=m3u8]/bestvideo[height>=720][protocol^=m3u8]+bestaudio[protocol^=m3u8]/best[height>=720][protocol^=m3u8]/bestvideo[height>=720]+bestaudio',
     sort: YTDLP_QUALITY_SORT,
   },
   {
-    // 5. Embedded TV HD fallback
-    name: 'tv-vr-hd',
-    extraArgs: ['--extractor-args', 'youtube:player_client=tv_embedded,tv,android_vr'],
+    // 6. Mobile web client (frequently avoids desktop 403s while keeping 1080p/4K)
+    name: 'mweb-hd',
+    extraArgs: ['--extractor-args', 'youtube:player_client=mweb'],
     format: YTDLP_HD_QUALITY_FORMAT,
     sort: YTDLP_QUALITY_SORT,
   },
   {
-    // 6. Final fallback only when no HD/4K source exists via yt-dlp or direct stream
+    // 7. Dual-stack (IPv6-enabled) default fallback when IPv4 CGNAT is rate-limited with HTTP 403
+    name: 'default-dualstack-4k',
+    extraArgs: [],
+    format: YTDLP_HD_QUALITY_FORMAT,
+    sort: YTDLP_QUALITY_SORT,
+    forceIpv4: false,
+  },
+  {
+    // 8. Final fallback only when no HD/4K source exists via yt-dlp or direct stream
     name: 'best-any-fallback',
     extraArgs: [],
     format: YTDLP_BEST_QUALITY_FORMAT,
@@ -331,7 +353,7 @@ async function locateDownloadedSourceFile(jobDir: string): Promise<string | null
 /**
  * Downloads the highest available YouTube video & audio quality (including 4K/1440p/1080p60)
  * losslessly remuxed into the confined job directory, automatically retrying 4K adaptive, HLS,
- * and alternative player client strategies if YouTube returns HTTP 403.
+ * dual-stack, and alternative player client strategies if YouTube returns HTTP 403.
  */
 export async function downloadVideo(
   canonicalUrl: string,
@@ -340,7 +362,8 @@ export async function downloadVideo(
 ): Promise<string> {
   const allowLowResFallback = options?.allowLowResFallback ?? true;
   const outputTemplate = assertPathInside(jobDir, path.join(jobDir, 'source.%(ext)s'));
-  const baseArgs = await buildYtDlpBaseArgs(jobDir);
+  const ipv4BaseArgs = await buildYtDlpBaseArgs(jobDir, { forceIpv4: true });
+  const dualStackBaseArgs = await buildYtDlpBaseArgs(jobDir, { forceIpv4: false });
   let lastError: unknown = null;
 
   for (const strategy of YTDLP_DOWNLOAD_STRATEGIES) {
@@ -348,6 +371,7 @@ export async function downloadVideo(
       continue;
     }
     await cleanupPartialSourceFiles(jobDir);
+    const baseArgs = strategy.forceIpv4 === false ? dualStackBaseArgs : ipv4BaseArgs;
     try {
       await execYtDlp(
         [

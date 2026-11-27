@@ -434,7 +434,7 @@ test('viral hook scorer ranks a strong hook above generic channel intros and pic
   assert.equal(picked[0].start, 20, 'Should pick the viral hook at 20s instead of the 0s channel intro');
 });
 
-test('buildVerticalFilterComplex supports 4K Lanczos+unsharp full vertical crop and horizontal-in-9:16 blurred fill', () => {
+test('buildVerticalFilterComplex supports 4K Lanczos+CAS full vertical crop and horizontal-in-9:16 blurred fill', () => {
   const fillFilter = buildVerticalFilterComplex({
     width: 2160,
     height: 3840,
@@ -443,7 +443,7 @@ test('buildVerticalFilterComplex supports 4K Lanczos+unsharp full vertical crop 
   });
   assert.ok(
     fillFilter.includes(
-      "crop='trunc(min(iw,ih*9/16)/2)*2':'trunc(min(ih,iw*16/9)/2)*2',scale=2160:3840:flags=lanczos+accurate_rnd+full_chroma_int,unsharp=5:5:0.6:3:3:0.0,setsar=1,setdar=9/16"
+      "crop='trunc(min(iw,ih*9/16)/2)*2':'trunc(min(ih,iw*16/9)/2)*2',hqdn3d=1.2:1.2:3:3,scale=2160:3840:flags=lanczos+accurate_rnd+full_chroma_int,cas=strength=0.45,setsar=1,setdar=9/16"
     )
   );
   assert.ok(!fillFilter.includes('boxblur'));
@@ -459,7 +459,7 @@ test('buildVerticalFilterComplex supports 4K Lanczos+unsharp full vertical crop 
   assert.ok(blurFilter.includes('boxblur=36:4[bg]'));
   assert.ok(
     blurFilter.includes(
-      'force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos+accurate_rnd+full_chroma_int,unsharp=5:5:0.55:3:3:0.0[fg]'
+      'hqdn3d=1.2:1.2:3:3,scale=2160:3840:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos+accurate_rnd+full_chroma_int,cas=strength=0.4[fg]'
     )
   );
   assert.ok(blurFilter.includes('[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,setdar=9/16,ass=clip-1.ass[vout]'));
@@ -683,8 +683,8 @@ test('extractBestStreams and yt-dlp/ffmpeg settings prioritize highest video & c
     VERTICAL_4K_TARGET_BITRATE,
     VERTICAL_4K_RESOLUTION
   );
-  assert.ok(encodeArgs.includes('-crf') && encodeArgs[encodeArgs.indexOf('-crf') + 1] === '15');
-  assert.ok(encodeArgs.includes('-maxrate') && encodeArgs[encodeArgs.indexOf('-maxrate') + 1] === '50000k');
+  assert.ok(encodeArgs.includes('-crf') && encodeArgs[encodeArgs.indexOf('-crf') + 1] === '14');
+  assert.ok(encodeArgs.includes('-maxrate') && encodeArgs[encodeArgs.indexOf('-maxrate') + 1] === '60000k');
   assert.ok(encodeArgs.includes('-level:v') && encodeArgs[encodeArgs.indexOf('-level:v') + 1] === '5.2');
   assert.ok(encodeArgs.includes('-profile:v') && encodeArgs[encodeArgs.indexOf('-profile:v') + 1] === 'high');
   assert.ok(encodeArgs.includes('-metadata:s:v:0') && encodeArgs[encodeArgs.indexOf('-metadata:s:v:0') + 1] === 'rotate=0');
@@ -761,7 +761,7 @@ test('parseHlsMaxHeight, HLS stream candidate extraction, and IP family detectio
   });
   assert.equal(trustedCandidates.length, 2);
   assert.equal(trustedCandidates[0].isHls, true);
-  assert.equal(trustedCandidates[0].height, 1080);
+  assert.equal(trustedCandidates[0].height, 2160);
   assert.equal(trustedCandidates[1].height, 360);
 
   // Must reject untrusted non-googlevideo HLS URLs (SSRF protection)

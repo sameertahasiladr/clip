@@ -797,7 +797,8 @@ export function extractStreamCandidates(
     });
   }
 
-  // 4. HLS master playlist (IOS client provides 1080p/1440p/4K HLS without GVS PO-token 403s)
+  // 4. HLS master playlist (IOS client provides 1080p/1440p/4K HLS without GVS PO-token 403s;
+  // probeHlsManifestPlayable updates height to the exact max variant resolution from #EXT-X-STREAM-INF)
   if (
     typeof streamingData.hlsManifestUrl === 'string' &&
     isTrustedGoogleVideoStreamUrl(streamingData.hlsManifestUrl)
@@ -805,7 +806,7 @@ export function extractStreamCandidates(
     pushUnique({
       videoUrl: streamingData.hlsManifestUrl,
       audioUrl: null,
-      height: 1080,
+      height: 2160,
       isHls: true,
     });
   }

@@ -223,6 +223,9 @@ export function ClipCard({
                 {clip.width >= 2160 || clip.height >= 3840
                   ? `4K · ${clip.width}×${clip.height}`
                   : `${clip.width}×${clip.height}`}
+                {clip.bitrateKbps && clip.bitrateKbps >= 1000
+                  ? ` · ${(clip.bitrateKbps / 1000).toFixed(1)} Mbps`
+                  : ''}
               </span>
             ) : null}
           </div>

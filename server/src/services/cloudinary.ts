@@ -32,14 +32,27 @@ export async function uploadClipToCloudinary(
 ): Promise<string> {
   ensureCloudinaryConfigured();
 
-  const uploadResult = await cloudinary.uploader.upload(localFilePath, {
-    resource_type: 'video',
-    folder: `clipgenie/${jobId}`,
-    public_id: `clip-${clipIndex + 1}`,
-    overwrite: true,
-  });
+  const uploadResult = (await new Promise((resolve, reject) => {
+    cloudinary.uploader.upload_large(
+      localFilePath,
+      {
+        resource_type: 'video',
+        folder: `clipgenie/${jobId}`,
+        public_id: `clip-${clipIndex + 1}`,
+        overwrite: true,
+        chunk_size: 20_000_000,
+      },
+      (err, result) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(result);
+      }
+    );
+  })) as { secure_url?: string } | undefined;
 
-  if (!uploadResult.secure_url) {
+  if (!uploadResult?.secure_url) {
     throw new Error('Cloudinary upload succeeded without returning a secure URL.');
   }
 
