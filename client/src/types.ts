@@ -76,6 +76,11 @@ export interface ClipItem {
   captionCues?: CaptionCue[];
   startTime?: number;
   endTime?: number;
+  width?: number;
+  height?: number;
+  bitrateKbps?: number;
+  sourceWidth?: number;
+  sourceHeight?: number;
 }
 
 export interface JobResponse {

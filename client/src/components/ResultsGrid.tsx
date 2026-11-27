@@ -136,13 +136,29 @@ export function ResultsGrid({
                 </p>
               </div>
             </div>
-            <div className="shrink-0 text-xs text-zinc-400 sm:text-right">
+              <div className="shrink-0 text-xs text-zinc-400 sm:text-right">
               <p className="font-medium text-zinc-200">{sourceCopyright.channelName}</p>
               {sourceCopyright.category && (
                 <p className="text-[11px] text-zinc-400">Category: {sourceCopyright.category}</p>
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {clips[0]?.sourceHeight && clips[0].sourceHeight < 720 && (
+        <div
+          role="status"
+          className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-4 py-3 text-xs leading-relaxed text-amber-100"
+        >
+          <span className="font-semibold text-amber-200">
+            Low-resolution YouTube source detected ({clips[0].sourceWidth ?? '?'}×{clips[0].sourceHeight}):
+          </span>{' '}
+          Your clip was exported at 4K ({clips[0].width ?? 2160}×{clips[0].height ?? 3840}), but YouTube only served a {clips[0].sourceHeight}p source stream. For crisp native 4K quality, run{' '}
+          <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">
+            yt-dlp -U
+          </code>{' '}
+          on your local server and restart it, or choose a video uploaded in 1080p/4K.
         </div>
       )}
 

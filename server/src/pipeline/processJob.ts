@@ -29,7 +29,7 @@ export const EXPORTS_BASE_DIR = path.resolve(os.tmpdir(), 'clipgenie-exports');
 export const UPLOADS_BASE_DIR = path.resolve(os.tmpdir(), 'clipgenie-uploads');
 export const AUDIO_TRACKS_BASE_DIR = path.resolve(os.tmpdir(), 'clipgenie-audio');
 export const VERTICAL_4K_RESOLUTION = '2160x3840' as const;
-export const VERTICAL_4K_TARGET_BITRATE = '20000k';
+export const VERTICAL_4K_TARGET_BITRATE = '35000k';
 
 const ALLOWED_AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.ogg', '.flac', '.webm'] as const;
 
@@ -62,7 +62,7 @@ async function isYtDlpAvailable(): Promise<boolean> {
 
 async function probeLocalVideoInfo(
   filePath: string
-): Promise<{ duration: number; width: number; height: number }> {
+): Promise<{ duration: number; width: number; height: number; bitrateKbps: number }> {
   const { stdout } = await execFileAsync(
     'ffprobe',
     [
@@ -71,7 +71,7 @@ async function probeLocalVideoInfo(
       '-select_streams',
       'v:0',
       '-show_entries',
-      'format=duration:stream=width,height',
+      'format=duration,bit_rate:stream=width,height,bit_rate',
       '-of',
       'json',
       filePath,
@@ -79,8 +79,8 @@ async function probeLocalVideoInfo(
     { timeout: 15_000 }
   );
   const parsed = JSON.parse(stdout) as {
-    format?: { duration?: string };
-    streams?: Array<{ width?: number; height?: number }>;
+    format?: { duration?: string; bit_rate?: string };
+    streams?: Array<{ width?: number; height?: number; bit_rate?: string }>;
   };
   const seconds = Number.parseFloat(parsed.format?.duration ?? '');
   if (!Number.isFinite(seconds) || seconds <= 0) {
@@ -89,10 +89,15 @@ async function probeLocalVideoInfo(
   if (seconds > config.maxVideoDurationSeconds) {
     throw new Error('Videos longer than 60 minutes are not supported.');
   }
+  const rawBitrate = Number.parseInt(
+    parsed.streams?.[0]?.bit_rate ?? parsed.format?.bit_rate ?? '0',
+    10
+  );
   return {
     duration: Math.round(seconds),
     width: parsed.streams?.[0]?.width ?? 0,
     height: parsed.streams?.[0]?.height ?? 0,
+    bitrateKbps: Number.isFinite(rawBitrate) && rawBitrate > 0 ? Math.round(rawBitrate / 1000) : 0,
   };
 }
 
@@ -173,158 +178,262 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
   await fs.mkdir(jobDir, { recursive: true });
 
   try {
-    const parsedUrl = parseCanonicalYouTubeUrl(job.url);
-    if (!parsedUrl.valid || !parsedUrl.videoId || !parsedUrl.canonicalUrl) {
-      throw new Error(parsedUrl.error ?? 'Invalid YouTube URL.');
-    }
-
-    const { videoId, canonicalUrl } = parsedUrl;
-
-    await store.updateProgress(jobId, {
-      status: 'processing',
-      step: 'Fetching video',
-      progress: 12,
-    });
-
-    logger.info('Starting server-side YouTube clip job', {
-      jobId,
-      videoId,
-      clipLength: job.clipLength,
-      clipCount: job.clipCount,
-      captions: job.captions,
-    });
-
-    const videoInfo = await fetchYouTubeVideoInfo(videoId, canonicalUrl);
-    let transcript: TranscriptSegment[] = videoInfo.transcript;
-    let videoDuration = videoInfo.duration;
+    let videoId = 'uploaded';
+    let canonicalUrl = job.url;
+    let videoTitle = job.sourceTitle ?? 'Uploaded Video';
+    let videoAuthor = 'Creator Upload';
+    let thumbnailUrl: string | undefined;
+    let chapters: Array<{ start: number; title: string }> = [];
+    let transcript: TranscriptSegment[] = [];
+    let videoDuration = 60;
     let downloadedVideoPath: string | null = null;
-    let ytDlpErrorReason = '';
+    let sourceWidth = 0;
+    let sourceHeight = 0;
+    let ytdlpInstalled = false;
 
-    await store.updateProgress(jobId, {
-      step: 'Fetching video',
-      progress: 20,
-      sourceCopyright: {
-        videoId,
-        title: videoInfo.title,
-        channelName: videoInfo.author,
-        channelId: videoInfo.channelId,
-        canonicalUrl,
-        sourceLicense: videoInfo.sourceLicense,
-        category: videoInfo.category,
-        hasLicensedMusicSignals: videoInfo.hasLicensedMusicSignals,
-        audioMode: job.audioMode ?? 'original',
-      },
-    });
-
-    // Stage 1b: Download the real YouTube video to jobDir/source.mp4 on the server
-    const ytdlpInstalled = await isYtDlpAvailable();
-    if (ytdlpInstalled) {
-      try {
-        downloadedVideoPath = await downloadVideo(canonicalUrl, jobDir);
-        logger.info('Downloaded YouTube video via yt-dlp', { jobId, videoId });
-      } catch (err) {
-        ytDlpErrorReason = err instanceof Error ? err.message : 'yt-dlp download failed';
-        logger.warn('yt-dlp download failed; checking direct YouTube stream', {
-          jobId,
-          videoId,
-          reason: ytDlpErrorReason,
-        });
+    if (job.uploadedFilePath) {
+      const resolvedUpload = path.resolve(job.uploadedFilePath);
+      if (!resolvedUpload.startsWith(UPLOADS_BASE_DIR + path.sep)) {
+        throw new Error('Unsafe uploaded video path.');
       }
-    }
+      await fs.access(resolvedUpload);
+      downloadedVideoPath = resolvedUpload;
 
-    let lastDirectDownloadError = '';
+      await store.updateProgress(jobId, {
+        status: 'processing',
+        step: 'Fetching video',
+        progress: 24,
+      });
 
-    if (!downloadedVideoPath && (videoInfo.streamCandidates.length > 0 || videoInfo.streamUrl)) {
+      const probed = await probeLocalVideoInfo(downloadedVideoPath);
+      videoDuration = probed.duration;
+      sourceWidth = probed.width;
+      sourceHeight = probed.height;
+      logger.info('Probed uploaded source video quality', {
+        jobId,
+        sourceWidth,
+        sourceHeight,
+        duration: videoDuration,
+      });
+    } else {
+      const parsedUrl = parseCanonicalYouTubeUrl(job.url);
+      if (!parsedUrl.valid || !parsedUrl.videoId || !parsedUrl.canonicalUrl) {
+        throw new Error(parsedUrl.error ?? 'Invalid YouTube URL.');
+      }
+
+      videoId = parsedUrl.videoId;
+      canonicalUrl = parsedUrl.canonicalUrl;
+
+      await store.updateProgress(jobId, {
+        status: 'processing',
+        step: 'Fetching video',
+        progress: 12,
+      });
+
+      logger.info('Starting server-side YouTube clip job', {
+        jobId,
+        videoId,
+        clipLength: job.clipLength,
+        clipCount: job.clipCount,
+        captions: job.captions,
+      });
+
+      const videoInfo = await fetchYouTubeVideoInfo(videoId, canonicalUrl);
+      videoTitle = videoInfo.title;
+      videoAuthor = videoInfo.author;
+      thumbnailUrl = videoInfo.thumbnailUrl;
+      chapters = videoInfo.chapters;
+      transcript = videoInfo.transcript;
+      videoDuration = videoInfo.duration;
+
+      let ytDlpErrorReason = '';
+
+      await store.updateProgress(jobId, {
+        step: 'Fetching video',
+        progress: 20,
+        sourceCopyright: {
+          videoId,
+          title: videoInfo.title,
+          channelName: videoInfo.author,
+          channelId: videoInfo.channelId,
+          canonicalUrl,
+          sourceLicense: videoInfo.sourceLicense,
+          category: videoInfo.category,
+          hasLicensedMusicSignals: videoInfo.hasLicensedMusicSignals,
+          audioMode: job.audioMode ?? 'original',
+        },
+      });
+
       const candidates: StreamCandidate[] =
         videoInfo.streamCandidates.length > 0
           ? videoInfo.streamCandidates
-          : [
-              {
-                videoUrl: videoInfo.streamUrl!,
-                audioUrl: videoInfo.audioStreamUrl,
-                height: 0,
-                userAgent: videoInfo.streamUserAgent,
-                clientName: 'DIRECT',
-              },
-            ];
+          : videoInfo.streamUrl
+            ? [
+                {
+                  videoUrl: videoInfo.streamUrl,
+                  audioUrl: videoInfo.audioStreamUrl,
+                  height: 0,
+                  userAgent: videoInfo.streamUserAgent,
+                  clientName: 'DIRECT',
+                },
+              ]
+            : [];
 
-      for (const candidate of candidates) {
+      const hasHdDirectCandidate = candidates.some((c) => c.height >= 1080);
+
+      // Stage 1b: Download the highest available YouTube source video (4K/1440p/1080p)
+      ytdlpInstalled = await isYtDlpAvailable();
+      if (ytdlpInstalled) {
         try {
-          downloadedVideoPath = await downloadYouTubeStreamsToFile({
-            videoStreamUrl: candidate.videoUrl,
-            audioStreamUrl: candidate.audioUrl,
-            isHls: candidate.isHls,
-            userAgent: candidate.userAgent,
-            cookieHeader: candidate.useCookies ? videoInfo.cookieHeader : undefined,
-            jobDir,
+          downloadedVideoPath = await downloadVideo(canonicalUrl, jobDir, {
+            allowLowResFallback: !hasHdDirectCandidate,
           });
-          logger.info('Downloaded YouTube video via direct stream into server temp folder', {
-            jobId,
-            videoId,
-            client: candidate.clientName,
-            height: candidate.height,
-            isHls: Boolean(candidate.isHls),
-            adaptiveMux: Boolean(candidate.audioUrl),
-          });
-          break;
+          logger.info('Downloaded YouTube video via yt-dlp', { jobId, videoId });
         } catch (err) {
-          lastDirectDownloadError = err instanceof Error ? err.message : 'unknown';
-          logger.warn('Direct stream candidate download failed; trying next quality fallback', {
+          ytDlpErrorReason = err instanceof Error ? err.message : 'yt-dlp download failed';
+          logger.warn('yt-dlp download failed; checking direct YouTube stream', {
             jobId,
             videoId,
-            client: candidate.clientName,
-            height: candidate.height,
-            isHls: Boolean(candidate.isHls),
-            reason: lastDirectDownloadError,
+            reason: ytDlpErrorReason,
           });
         }
       }
-    }
 
-    if (!downloadedVideoPath) {
-      const botBlocked =
-        videoInfo.botCheckBlocked ||
-        /confirm you.?re not a bot|LOGIN_REQUIRED|Sign in/i.test(ytDlpErrorReason);
+      if (downloadedVideoPath) {
+        try {
+          const probed = await probeLocalVideoInfo(downloadedVideoPath);
+          videoDuration = probed.duration;
+          sourceWidth = probed.width;
+          sourceHeight = probed.height;
+        } catch (probeErr) {
+          if (probeErr instanceof Error && probeErr.message.includes('60 minutes')) {
+            throw probeErr;
+          }
+        }
+      }
 
-      if (botBlocked) {
+      // If yt-dlp failed OR downloaded a lower-resolution stream than an available 4K/1440p/1080p direct candidate,
+      // try direct candidates that offer strictly higher resolution so we never settle for 360p/720p when 4K/1080p exists.
+      let lastDirectDownloadError = '';
+      const shouldTryDirectUpgrade =
+        !downloadedVideoPath ||
+        (sourceHeight > 0 &&
+          sourceHeight < 1440 &&
+          candidates.some((c) => c.height > sourceHeight));
+
+      if (shouldTryDirectUpgrade && candidates.length > 0) {
+        const directTargetDir = downloadedVideoPath
+          ? path.resolve(jobDir, 'direct-hd')
+          : jobDir;
+        if (directTargetDir !== jobDir) {
+          if (!directTargetDir.startsWith(jobDir + path.sep)) {
+            throw new Error('Unsafe direct download subdirectory.');
+          }
+          await fs.mkdir(directTargetDir, { recursive: true });
+        }
+
+        const candidateList = downloadedVideoPath
+          ? candidates.filter((c) => c.height > sourceHeight)
+          : candidates;
+
+        for (const candidate of candidateList) {
+          try {
+            const directPath = await downloadYouTubeStreamsToFile({
+              videoStreamUrl: candidate.videoUrl,
+              audioStreamUrl: candidate.audioUrl,
+              isHls: candidate.isHls,
+              userAgent: candidate.userAgent,
+              cookieHeader: candidate.useCookies ? videoInfo.cookieHeader : undefined,
+              jobDir: directTargetDir,
+            });
+            const directProbed = await probeLocalVideoInfo(directPath).catch(() => null);
+            if (
+              !downloadedVideoPath ||
+              (directProbed && directProbed.height > sourceHeight)
+            ) {
+              downloadedVideoPath = directPath;
+              if (directProbed) {
+                videoDuration = directProbed.duration;
+                sourceWidth = directProbed.width;
+                sourceHeight = directProbed.height;
+              }
+              logger.info('Downloaded YouTube video via direct stream into server temp folder', {
+                jobId,
+                videoId,
+                client: candidate.clientName,
+                height: directProbed?.height ?? candidate.height,
+                isHls: Boolean(candidate.isHls),
+                adaptiveMux: Boolean(candidate.audioUrl),
+              });
+              break;
+            }
+          } catch (err) {
+            lastDirectDownloadError = err instanceof Error ? err.message : 'unknown';
+            logger.warn('Direct stream candidate download failed; trying next quality fallback', {
+              jobId,
+              videoId,
+              client: candidate.clientName,
+              height: candidate.height,
+              isHls: Boolean(candidate.isHls),
+              reason: lastDirectDownloadError,
+            });
+          }
+        }
+      }
+
+      if (!downloadedVideoPath) {
+        const botBlocked =
+          videoInfo.botCheckBlocked ||
+          /confirm you.?re not a bot|LOGIN_REQUIRED|Sign in/i.test(ytDlpErrorReason);
+
+        if (botBlocked) {
+          throw new Error(
+            'YouTube blocked unauthenticated download from this cloud server IP ("Sign in to confirm you\'re not a bot"). To enable server-side downloading for all YouTube links from a cloud host, set YTDLP_COOKIES_B64 (base64-encoded YouTube cookies.txt) or YTDLP_PROXY in your server environment, or run ClipGenie locally with Docker (docker compose up).'
+          );
+        }
+
+        if (!ytdlpInstalled && /403|Forbidden/i.test(lastDirectDownloadError)) {
+          throw new Error(
+            'YouTube blocked the direct server stream with HTTP 403 for this video. Install yt-dlp on your machine (Windows: winget install yt-dlp.yt-dlp or pip install -U yt-dlp) and restart the server for reliable 4K/1080p downloads.'
+          );
+        }
+
         throw new Error(
-          'YouTube blocked unauthenticated download from this cloud server IP ("Sign in to confirm you\'re not a bot"). To enable server-side downloading for all YouTube links from a cloud host, set YTDLP_COOKIES_B64 (base64-encoded YouTube cookies.txt) or YTDLP_PROXY in your server environment, or run ClipGenie locally with Docker (docker compose up).'
+          'Could not download this YouTube video on the server. Make sure the video is public, under 60 minutes, and not region- or age-restricted.'
         );
       }
 
-      if (!ytdlpInstalled && /403|Forbidden/i.test(lastDirectDownloadError)) {
-        throw new Error(
-          'YouTube blocked the direct server stream with HTTP 403 for this video. Install yt-dlp on your machine (Windows: winget install yt-dlp.yt-dlp or pip install -U yt-dlp) and restart the server for reliable 4K/1080p downloads.'
-        );
+      // Confirm exact duration and resolution from the final selected source video file
+      if (sourceWidth === 0 || sourceHeight === 0) {
+        try {
+          const probed = await probeLocalVideoInfo(downloadedVideoPath);
+          videoDuration = probed.duration;
+          sourceWidth = probed.width;
+          sourceHeight = probed.height;
+        } catch (probeErr) {
+          if (probeErr instanceof Error && probeErr.message.includes('60 minutes')) {
+            throw probeErr;
+          }
+        }
       }
 
-      throw new Error(
-        'Could not download this YouTube video on the server. Make sure the video is public, under 60 minutes, and not region- or age-restricted.'
-      );
-    }
-
-    // Confirm exact duration and resolution from the downloaded source video file
-    try {
-      const probed = await probeLocalVideoInfo(downloadedVideoPath);
-      videoDuration = probed.duration;
       logger.info('Probed downloaded source video quality', {
         jobId,
         videoId,
-        sourceWidth: probed.width,
-        sourceHeight: probed.height,
-        duration: probed.duration,
+        sourceWidth,
+        sourceHeight,
+        duration: videoDuration,
       });
-      if (probed.height > 0 && probed.height < 720) {
-        logger.warn('Downloaded source video is below 720p; install yt-dlp for full 1080p/4K source quality', {
-          jobId,
-          videoId,
-          sourceWidth: probed.width,
-          sourceHeight: probed.height,
-        });
-      }
-    } catch (probeErr) {
-      if (probeErr instanceof Error && probeErr.message.includes('60 minutes')) {
-        throw probeErr;
+      if (sourceHeight > 0 && sourceHeight < 720) {
+        logger.warn(
+          'Downloaded source video is below 720p; update yt-dlp (yt-dlp -U) for full 1080p/4K source quality',
+          {
+            jobId,
+            videoId,
+            sourceWidth,
+            sourceHeight,
+          }
+        );
       }
     }
 
@@ -370,12 +479,12 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
 
     const moments = await selectBestMoments({
       transcript,
-      chapters: videoInfo.chapters,
+      chapters,
       clipLength: job.clipLength,
       clipCount: job.clipCount,
       videoDuration,
-      videoTitle: videoInfo.title,
-      author: videoInfo.author,
+      videoTitle,
+      author: videoAuthor,
     });
 
     await store.updateProgress(jobId, {
@@ -383,7 +492,7 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
       progress: 74,
     });
 
-    // Stage 4 & 5: Cutting and formatting every clip from the downloaded local source.mp4
+    // Stage 4 & 5: Cutting and formatting every clip from the downloaded local source into 4K 2160x3840
     await store.updateProgress(jobId, {
       step: 'Cutting and formatting',
       progress: 78,
@@ -423,13 +532,28 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
         resolution: VERTICAL_4K_RESOLUTION,
       });
 
+      const renderedProbe = await probeLocalVideoInfo(artifacts.videoPath).catch(() => null);
+      const outputWidth = renderedProbe?.width || 2160;
+      const outputHeight = renderedProbe?.height || 3840;
+      const outputBitrateKbps = renderedProbe?.bitrateKbps || undefined;
+
+      logger.info('Rendered 4K vertical clip', {
+        jobId,
+        clipIndex: index + 1,
+        sourceWidth,
+        sourceHeight,
+        outputWidth,
+        outputHeight,
+        outputBitrateKbps,
+      });
+
       if (useCloudinary) {
         const videoUrl = await uploadClipToCloudinary(artifacts.videoPath, jobId, index);
         clips.push({
           id: `${jobId}-clip-${index + 1}`,
           title: moment.title,
           videoUrl,
-          posterUrl: videoInfo.thumbnailUrl,
+          posterUrl: thumbnailUrl,
           videoId,
           playbackMode: 'mp4',
           duration,
@@ -439,6 +563,11 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
           captionCues: relativeCues,
           startTime: Math.floor(moment.start),
           endTime: Math.ceil(moment.end),
+          width: outputWidth,
+          height: outputHeight,
+          bitrateKbps: outputBitrateKbps,
+          sourceWidth: sourceWidth || undefined,
+          sourceHeight: sourceHeight || undefined,
         });
       } else {
         const exported = await persistLocalClipExport(
@@ -451,7 +580,7 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
           id: `${jobId}-clip-${index + 1}`,
           title: moment.title,
           videoUrl: exported.videoUrl,
-          posterUrl: exported.posterUrl ?? videoInfo.thumbnailUrl,
+          posterUrl: exported.posterUrl ?? thumbnailUrl,
           videoId,
           playbackMode: 'mp4',
           duration,
@@ -461,6 +590,11 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
           captionCues: relativeCues,
           startTime: Math.floor(moment.start),
           endTime: Math.ceil(moment.end),
+          width: outputWidth,
+          height: outputHeight,
+          bitrateKbps: outputBitrateKbps,
+          sourceWidth: sourceWidth || undefined,
+          sourceHeight: sourceHeight || undefined,
         });
       }
 

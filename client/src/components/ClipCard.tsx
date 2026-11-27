@@ -212,11 +212,20 @@ export function ClipCard({
       <VerticalVideoPlayer clip={clip} />
 
       <div className="flex flex-1 flex-col p-5">
-        <div className="flex items-center justify-between gap-2 text-xs text-zinc-400">
-          <span className="font-mono tabular-nums">
-            Clip {String(index + 1).padStart(2, '0')} · {formatDuration(clip.duration)}
-            {hasRange ? ` (${formatDuration(clip.startTime!)}–${formatDuration(clip.endTime!)})` : ''}
-          </span>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
+          <div className="flex items-center gap-2">
+            <span className="font-mono tabular-nums">
+              Clip {String(index + 1).padStart(2, '0')} · {formatDuration(clip.duration)}
+              {hasRange ? ` (${formatDuration(clip.startTime!)}–${formatDuration(clip.endTime!)})` : ''}
+            </span>
+            {clip.width && clip.height ? (
+              <span className="rounded bg-fuchsia-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-fuchsia-200 border border-fuchsia-400/25">
+                {clip.width >= 2160 || clip.height >= 3840
+                  ? `4K · ${clip.width}×${clip.height}`
+                  : `${clip.width}×${clip.height}`}
+              </span>
+            ) : null}
+          </div>
           <span className={`font-medium ${virality.toneClass}`}>
             {virality.label} ({clip.score}/100)
           </span>

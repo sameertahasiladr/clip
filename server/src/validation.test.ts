@@ -441,7 +441,7 @@ test('buildVerticalFilterComplex supports 4K Lanczos+unsharp full vertical crop 
   });
   assert.ok(
     fillFilter.includes(
-      'scale=2160:3840:force_original_aspect_ratio=increase:flags=lanczos+accurate_rnd+full_chroma_int,crop=2160:3840,unsharp=5:5:0.45:3:3:0.0,setsar=1'
+      "crop='trunc(min(iw,ih*9/16)/2)*2':'trunc(min(ih,iw*16/9)/2)*2',scale=2160:3840:flags=lanczos+accurate_rnd+full_chroma_int,unsharp=5:5:0.6:3:3:0.0,setsar=1"
     )
   );
   assert.ok(!fillFilter.includes('boxblur'));
@@ -457,7 +457,7 @@ test('buildVerticalFilterComplex supports 4K Lanczos+unsharp full vertical crop 
   assert.ok(blurFilter.includes('boxblur=36:4[bg]'));
   assert.ok(
     blurFilter.includes(
-      'force_original_aspect_ratio=decrease:flags=lanczos+accurate_rnd+full_chroma_int,unsharp=5:5:0.45:3:3:0.0[fg]'
+      'force_original_aspect_ratio=decrease:flags=lanczos+accurate_rnd+full_chroma_int,unsharp=5:5:0.55:3:3:0.0[fg]'
     )
   );
   assert.ok(blurFilter.includes('[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,ass=clip-1.ass[vout]'));
@@ -667,22 +667,23 @@ test('extractBestStreams and yt-dlp/ffmpeg settings prioritize highest video & c
   assert.equal(YTDLP_BEST_QUALITY_FORMAT, 'bestvideo+bestaudio/best');
   assert.ok(YTDLP_QUALITY_SORT.startsWith('res,fps,vbr,abr'));
   assert.equal(YTDLP_DOWNLOAD_STRATEGIES[0].name, 'default-hd');
-  assert.ok(YTDLP_DOWNLOAD_STRATEGIES[0].format.includes('height>=720'));
+  assert.equal(YTDLP_DOWNLOAD_STRATEGIES[1].name, 'android_vr-4k');
+  assert.ok(YTDLP_DOWNLOAD_STRATEGIES[0].format.includes('height>=1440'));
   assert.ok(YTDLP_DOWNLOAD_STRATEGIES.some((s) => s.name === 'web_safari-hls-hd'));
   assert.equal(isValidCookiesBrowser('chrome'), true);
   assert.equal(isValidCookiesBrowser('chrome; rm -rf /'), false);
 
   assert.equal(VERTICAL_4K_RESOLUTION, '2160x3840');
-  assert.equal(VERTICAL_4K_TARGET_BITRATE, '20000k');
+  assert.equal(VERTICAL_4K_TARGET_BITRATE, '35000k');
   const encodeArgs = buildHighQualityEncodeArgs(
     VERTICAL_4K_TARGET_BITRATE,
     VERTICAL_4K_RESOLUTION
   );
-  assert.ok(encodeArgs.includes('-b:v') && encodeArgs[encodeArgs.indexOf('-b:v') + 1] === '20000k');
-  assert.ok(encodeArgs.includes('-maxrate') && encodeArgs[encodeArgs.indexOf('-maxrate') + 1] === '35000k');
+  assert.ok(encodeArgs.includes('-crf') && encodeArgs[encodeArgs.indexOf('-crf') + 1] === '15');
+  assert.ok(encodeArgs.includes('-maxrate') && encodeArgs[encodeArgs.indexOf('-maxrate') + 1] === '50000k');
   assert.ok(encodeArgs.includes('-level:v') && encodeArgs[encodeArgs.indexOf('-level:v') + 1] === '5.2');
   assert.ok(encodeArgs.includes('-profile:v') && encodeArgs[encodeArgs.indexOf('-profile:v') + 1] === 'high');
-  assert.ok(encodeArgs.includes('-b:a') && encodeArgs[encodeArgs.indexOf('-b:a') + 1] === '192k');
+  assert.ok(encodeArgs.includes('-b:a') && encodeArgs[encodeArgs.indexOf('-b:a') + 1] === '320k');
   assert.ok(encodeArgs.includes('-ar') && encodeArgs[encodeArgs.indexOf('-ar') + 1] === '48000');
 
   // Verify fallback chain includes 4K adaptive -> 1080p MP4 adaptive -> 360p muxed fallback

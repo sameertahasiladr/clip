@@ -1454,9 +1454,9 @@ export async function fetchYouTubeVideoInfo(
           }
         }
 
-        // Stop searching additional clients once we have a verified >= 1080p stream
-        if (verifiedBestCandidate && verifiedBestCandidate.height >= 1080) {
-          logger.info('Resolved verified high-quality YouTube video stream', {
+        // Stop searching additional clients only once we have a verified 4K (2160p+) stream
+        if (verifiedBestCandidate && verifiedBestCandidate.height >= 2160) {
+          logger.info('Resolved verified 4K YouTube video stream', {
             videoId,
             client: verifiedBestCandidate.clientName,
             height: verifiedBestCandidate.height,

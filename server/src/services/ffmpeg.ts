@@ -167,8 +167,8 @@ export type ClipResolution = '720x1280' | '1080x1920' | '2160x3840';
 
 /**
  * Builds the FFmpeg filter_complex string for either:
- * - 'vertical-fill': true full-bleed 9:16 vertical center-crop filling 100% of the 4K/HD frame
- * - 'vertical-blur': original horizontal video centered inside a 9:16 vertical frame with blurred background fill
+ * - 'vertical-fill': crops to exact 9:16 first (even dimensions) then Lanczos-scales cleanly to 4K 2160x3840
+ * - 'vertical-blur': original horizontal video centered inside a 4K 9:16 vertical frame with blurred background fill
  */
 export function buildVerticalFilterComplex(params: {
   width: number;
@@ -179,41 +179,44 @@ export function buildVerticalFilterComplex(params: {
 }): string {
   const { width, height, videoLayout, subtitleFilter, videoFilter } = params;
   if (videoFilter) {
-    return `[0:v]${videoFilter},unsharp=5:5:0.35:3:3:0.0,setsar=1${subtitleFilter}[vout]`;
+    return `[0:v]${videoFilter},unsharp=5:5:0.45:3:3:0.0,setsar=1${subtitleFilter}[vout]`;
   }
 
   const lanczosFlags = 'lanczos+accurate_rnd+full_chroma_int';
-  const sharpen = 'unsharp=5:5:0.45:3:3:0.0';
+  const cropTo9x16 = "crop='trunc(min(iw,ih*9/16)/2)*2':'trunc(min(ih,iw*16/9)/2)*2'";
 
   if (videoLayout === 'vertical-blur') {
     const blurRadius = width >= 2160 ? '36:4' : '20:3';
     return [
-      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${width}:${height},boxblur=${blurRadius}[bg]`,
-      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=${lanczosFlags},${sharpen}[fg]`,
+      `[0:v]${cropTo9x16},scale=${width}:${height}:flags=lanczos,boxblur=${blurRadius}[bg]`,
+      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=${lanczosFlags},unsharp=5:5:0.55:3:3:0.0[fg]`,
       `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1${subtitleFilter}[vout]`,
     ].join(';');
   }
 
-  return `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase:flags=${lanczosFlags},crop=${width}:${height},${sharpen},setsar=1${subtitleFilter}[vout]`;
+  return `[0:v]${cropTo9x16},scale=${width}:${height}:flags=${lanczosFlags},unsharp=5:5:0.6:3:3:0.0,setsar=1${subtitleFilter}[vout]`;
 }
 
 /**
- * 4K / High-Definition H.264 + AAC Shorts/Reels encoding arguments:
- * 20000k target bitrate (35000k maxrate) for 4K 2160x3840 at High@5.2, BT.709 color metadata, and 192 kbps 48 kHz audio.
+ * YouTube 4K UHD (2160x3840) H.264 + AAC encoding arguments:
+ * Visually-lossless CRF 15 with 50 Mbps VBV ceiling (High@5.2, closed GOP, 2 B-frames, AQ mode 3,
+ * BT.709 color metadata, and 320 kbps 48 kHz AAC audio) — eliminates 1-pass ABR startup blur.
  */
 export function buildHighQualityEncodeArgs(
-  videoBitrate = '20000k',
+  videoBitrate = '35000k',
   resolution: ClipResolution = '2160x3840',
   includeAudio = true
 ): string[] {
   const is4K = resolution === '2160x3840';
   const level = is4K ? '5.2' : '4.2';
-  const maxRate = is4K ? '35000k' : '12000k';
-  const bufSize = is4K ? '50000k' : '16000k';
+  const crf = is4K ? '15' : '16';
+  const requestedKbps = Number.parseInt(videoBitrate.replace(/[^\d]/g, ''), 10) || (is4K ? 35000 : 10000);
+  const maxRateKbps = is4K ? Math.max(50000, requestedKbps) : Math.max(16000, requestedKbps);
+  const bufSizeKbps = Math.round(maxRateKbps * 1.5);
   const preset = is4K ? 'fast' : 'medium';
 
   const audioArgs = includeAudio
-    ? ['-c:a', 'aac', '-b:a', '192k', '-ar', '48000']
+    ? ['-c:a', 'aac', '-b:a', '320k', '-ar', '48000']
     : ['-an'];
 
   return [
@@ -227,12 +230,18 @@ export function buildHighQualityEncodeArgs(
     level,
     '-preset',
     preset,
-    '-b:v',
-    videoBitrate,
+    '-crf',
+    crf,
     '-maxrate',
-    maxRate,
+    `${maxRateKbps}k`,
     '-bufsize',
-    bufSize,
+    `${bufSizeKbps}k`,
+    '-bf',
+    '2',
+    '-flags',
+    '+cgop',
+    '-x264-params',
+    'aq-mode=3:aq-strength=1.05:deblock=-1,-1',
     '-pix_fmt',
     'yuv420p',
     '-color_primaries',
@@ -241,6 +250,8 @@ export function buildHighQualityEncodeArgs(
     'bt709',
     '-colorspace',
     'bt709',
+    '-color_range',
+    'tv',
     '-aspect',
     '9:16',
     ...audioArgs,
@@ -288,7 +299,7 @@ export async function renderVerticalClip(params: {
     customAudioPath,
     videoFilter,
     resolution = '2160x3840',
-    videoBitrate = resolution === '2160x3840' ? '20000k' : '8000k',
+    videoBitrate = resolution === '2160x3840' ? '35000k' : '10000k',
   } = params;
 
   const resolvedBase = path.resolve(jobDir);
@@ -350,8 +361,6 @@ export async function renderVerticalClip(params: {
     ...inputArgs,
     '-ss',
     moment.start.toFixed(2),
-    '-t',
-    duration.toFixed(2),
     '-i',
     sourceInput,
   ];
@@ -360,7 +369,7 @@ export async function renderVerticalClip(params: {
     ffmpegArgs.push('-stream_loop', '-1', '-i', customAudioPath);
   }
 
-  ffmpegArgs.push('-filter_complex', filterComplex, '-map', '[vout]');
+  ffmpegArgs.push('-t', duration.toFixed(2), '-filter_complex', filterComplex, '-map', '[vout]');
 
   if (useCustomAudio) {
     ffmpegArgs.push('-map', '[aout]', '-shortest');

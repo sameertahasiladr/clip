@@ -234,51 +234,61 @@ export async function fetchVideoMetadata(
 }
 
 export const YTDLP_BEST_QUALITY_FORMAT = 'bestvideo+bestaudio/best';
-export const YTDLP_HD_QUALITY_FORMAT = 'bestvideo[height>=720]+bestaudio/best[height>=720]';
-export const YTDLP_QUALITY_SORT = 'res,fps,vbr,abr,ext:mp4:m4a';
+export const YTDLP_HD_QUALITY_FORMAT =
+  'bestvideo[height>=1440]+bestaudio/bestvideo[height>=1080]+bestaudio/bestvideo[height>=720]+bestaudio/best[height>=720]';
+export const YTDLP_QUALITY_SORT = 'res,fps,vbr,abr';
 
 export const YTDLP_DOWNLOAD_STRATEGIES: ReadonlyArray<{
   name: string;
   extraArgs: string[];
   format: string;
   sort: string;
+  isLowResFallback?: boolean;
 }> = [
   {
-    // 1. yt-dlp native default + Node.js EJS solver, requiring HD (>=720p / 1080p / 4K) so it never silently settles for 360p
+    // 1. yt-dlp native default + Node.js EJS solver, strictly preferring 4K (2160p) -> 1440p -> 1080p -> 720p
     name: 'default-hd',
     extraArgs: [],
     format: YTDLP_HD_QUALITY_FORMAT,
     sort: YTDLP_QUALITY_SORT,
   },
   {
-    // 2. Safari + TV HLS streams (1080p/4K HLS bypasses HTTPS adaptive GVS PO-token 403s)
+    // 2. Android VR + Smart TV adaptive streams — serves true 4K 2160p VP9/AV1 without PO-token 403s
+    name: 'android_vr-4k',
+    extraArgs: ['--extractor-args', 'youtube:player_client=android_vr,tv'],
+    format: YTDLP_HD_QUALITY_FORMAT,
+    sort: YTDLP_QUALITY_SORT,
+  },
+  {
+    // 3. Safari + TV HLS streams (1080p/4K HLS bypasses HTTPS adaptive GVS PO-token 403s)
     name: 'web_safari-hls-hd',
     extraArgs: ['--rm-cache-dir', '--extractor-args', 'youtube:player_client=web_safari,tv'],
     format:
-      'bestvideo[height>=720][protocol^=m3u8]+bestaudio[protocol^=m3u8]/bestvideo[height>=720]+bestaudio/best[height>=720]',
-    sort: 'res,fps,vbr,abr',
+      'bestvideo[height>=1080][protocol^=m3u8]+bestaudio[protocol^=m3u8]/bestvideo[height>=720][protocol^=m3u8]+bestaudio[protocol^=m3u8]/bestvideo[height>=720]+bestaudio/best[height>=720]',
+    sort: YTDLP_QUALITY_SORT,
   },
   {
-    // 3. iOS + TV HLS streams (1080p/4K HLS fallback)
+    // 4. iOS + TV HLS streams (1080p/4K HLS fallback)
     name: 'ios-hls-hd',
     extraArgs: ['--extractor-args', 'youtube:player_client=ios,tv'],
     format:
-      'bestvideo[height>=720][protocol^=m3u8]+bestaudio[protocol^=m3u8]/best[height>=720][protocol^=m3u8]/bestvideo[height>=720]+bestaudio',
-    sort: 'res,fps,vbr,abr',
+      'bestvideo[height>=1080][protocol^=m3u8]+bestaudio[protocol^=m3u8]/bestvideo[height>=720][protocol^=m3u8]+bestaudio[protocol^=m3u8]/best[height>=720][protocol^=m3u8]/bestvideo[height>=720]+bestaudio',
+    sort: YTDLP_QUALITY_SORT,
   },
   {
-    // 4. Smart TV / embedded TV / Android VR HD streams
+    // 5. Embedded TV HD fallback
     name: 'tv-vr-hd',
-    extraArgs: ['--extractor-args', 'youtube:player_client=tv,tv_embedded,android_vr'],
+    extraArgs: ['--extractor-args', 'youtube:player_client=tv_embedded,tv,android_vr'],
     format: YTDLP_HD_QUALITY_FORMAT,
-    sort: 'res,fps,vbr,abr',
+    sort: YTDLP_QUALITY_SORT,
   },
   {
-    // 5. Final fallback only when the source video on YouTube itself is below 720p
+    // 6. Final fallback only when no HD/4K source exists via yt-dlp or direct stream
     name: 'best-any-fallback',
     extraArgs: [],
     format: YTDLP_BEST_QUALITY_FORMAT,
-    sort: 'res,fps,vbr,abr',
+    sort: YTDLP_QUALITY_SORT,
+    isLowResFallback: true,
   },
 ];
 
@@ -320,15 +330,23 @@ async function locateDownloadedSourceFile(jobDir: string): Promise<string | null
 
 /**
  * Downloads the highest available YouTube video & audio quality (including 4K/1440p/1080p60)
- * losslessly remuxed into the confined job directory, automatically retrying HLS & alternative
- * player client strategies if YouTube returns HTTP 403 on HTTPS adaptive formats.
+ * losslessly remuxed into the confined job directory, automatically retrying 4K adaptive, HLS,
+ * and alternative player client strategies if YouTube returns HTTP 403.
  */
-export async function downloadVideo(canonicalUrl: string, jobDir: string): Promise<string> {
+export async function downloadVideo(
+  canonicalUrl: string,
+  jobDir: string,
+  options?: { allowLowResFallback?: boolean }
+): Promise<string> {
+  const allowLowResFallback = options?.allowLowResFallback ?? true;
   const outputTemplate = assertPathInside(jobDir, path.join(jobDir, 'source.%(ext)s'));
   const baseArgs = await buildYtDlpBaseArgs(jobDir);
   let lastError: unknown = null;
 
   for (const strategy of YTDLP_DOWNLOAD_STRATEGIES) {
+    if (strategy.isLowResFallback && !allowLowResFallback) {
+      continue;
+    }
     await cleanupPartialSourceFiles(jobDir);
     try {
       await execYtDlp(
