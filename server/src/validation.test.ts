@@ -16,8 +16,10 @@ import {
   parseSubtitlesToSegments,
 } from './services/ytdlp.js';
 import {
+  VERTICAL_4K_HEIGHT,
   VERTICAL_4K_RESOLUTION,
   VERTICAL_4K_TARGET_BITRATE,
+  VERTICAL_4K_WIDTH,
 } from './pipeline/processJob.js';
 import {
   buildAssSubtitles,
@@ -441,7 +443,7 @@ test('buildVerticalFilterComplex supports 4K Lanczos+unsharp full vertical crop 
   });
   assert.ok(
     fillFilter.includes(
-      "crop='trunc(min(iw,ih*9/16)/2)*2':'trunc(min(ih,iw*16/9)/2)*2',scale=2160:3840:flags=lanczos+accurate_rnd+full_chroma_int,unsharp=5:5:0.6:3:3:0.0,setsar=1"
+      "crop='trunc(min(iw,ih*9/16)/2)*2':'trunc(min(ih,iw*16/9)/2)*2',scale=2160:3840:flags=lanczos+accurate_rnd+full_chroma_int,unsharp=5:5:0.6:3:3:0.0,setsar=1,setdar=9/16"
     )
   );
   assert.ok(!fillFilter.includes('boxblur'));
@@ -457,10 +459,10 @@ test('buildVerticalFilterComplex supports 4K Lanczos+unsharp full vertical crop 
   assert.ok(blurFilter.includes('boxblur=36:4[bg]'));
   assert.ok(
     blurFilter.includes(
-      'force_original_aspect_ratio=decrease:flags=lanczos+accurate_rnd+full_chroma_int,unsharp=5:5:0.55:3:3:0.0[fg]'
+      'force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos+accurate_rnd+full_chroma_int,unsharp=5:5:0.55:3:3:0.0[fg]'
     )
   );
-  assert.ok(blurFilter.includes('[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,ass=clip-1.ass[vout]'));
+  assert.ok(blurFilter.includes('[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,setdar=9/16,ass=clip-1.ass[vout]'));
 });
 
 test('SocialAccountStore enforces single-use OAuth state, hides tokens in summary, and switches Meta pages', () => {
@@ -673,6 +675,8 @@ test('extractBestStreams and yt-dlp/ffmpeg settings prioritize highest video & c
   assert.equal(isValidCookiesBrowser('chrome'), true);
   assert.equal(isValidCookiesBrowser('chrome; rm -rf /'), false);
 
+  assert.equal(VERTICAL_4K_WIDTH, 2160);
+  assert.equal(VERTICAL_4K_HEIGHT, 3840);
   assert.equal(VERTICAL_4K_RESOLUTION, '2160x3840');
   assert.equal(VERTICAL_4K_TARGET_BITRATE, '35000k');
   const encodeArgs = buildHighQualityEncodeArgs(
@@ -683,6 +687,7 @@ test('extractBestStreams and yt-dlp/ffmpeg settings prioritize highest video & c
   assert.ok(encodeArgs.includes('-maxrate') && encodeArgs[encodeArgs.indexOf('-maxrate') + 1] === '50000k');
   assert.ok(encodeArgs.includes('-level:v') && encodeArgs[encodeArgs.indexOf('-level:v') + 1] === '5.2');
   assert.ok(encodeArgs.includes('-profile:v') && encodeArgs[encodeArgs.indexOf('-profile:v') + 1] === 'high');
+  assert.ok(encodeArgs.includes('-metadata:s:v:0') && encodeArgs[encodeArgs.indexOf('-metadata:s:v:0') + 1] === 'rotate=0');
   assert.ok(encodeArgs.includes('-b:a') && encodeArgs[encodeArgs.indexOf('-b:a') + 1] === '320k');
   assert.ok(encodeArgs.includes('-ar') && encodeArgs[encodeArgs.indexOf('-ar') + 1] === '48000');
 

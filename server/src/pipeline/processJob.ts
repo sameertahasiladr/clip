@@ -28,6 +28,8 @@ const execFileAsync = promisify(execFile);
 export const EXPORTS_BASE_DIR = path.resolve(os.tmpdir(), 'clipgenie-exports');
 export const UPLOADS_BASE_DIR = path.resolve(os.tmpdir(), 'clipgenie-uploads');
 export const AUDIO_TRACKS_BASE_DIR = path.resolve(os.tmpdir(), 'clipgenie-audio');
+export const VERTICAL_4K_WIDTH = 2160 as const;
+export const VERTICAL_4K_HEIGHT = 3840 as const;
 export const VERTICAL_4K_RESOLUTION = '2160x3840' as const;
 export const VERTICAL_4K_TARGET_BITRATE = '35000k';
 
@@ -533,9 +535,23 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
       });
 
       const renderedProbe = await probeLocalVideoInfo(artifacts.videoPath).catch(() => null);
-      const outputWidth = renderedProbe?.width || 2160;
-      const outputHeight = renderedProbe?.height || 3840;
+      const outputWidth = renderedProbe?.width || VERTICAL_4K_WIDTH;
+      const outputHeight = renderedProbe?.height || VERTICAL_4K_HEIGHT;
       const outputBitrateKbps = renderedProbe?.bitrateKbps || undefined;
+
+      if (
+        renderedProbe &&
+        (renderedProbe.width !== VERTICAL_4K_WIDTH || renderedProbe.height !== VERTICAL_4K_HEIGHT)
+      ) {
+        logger.warn('Rendered clip dimensions differed from expected 4K vertical 2160x3840', {
+          jobId,
+          clipIndex: index + 1,
+          expectedWidth: VERTICAL_4K_WIDTH,
+          expectedHeight: VERTICAL_4K_HEIGHT,
+          actualWidth: renderedProbe.width,
+          actualHeight: renderedProbe.height,
+        });
+      }
 
       logger.info('Rendered 4K vertical clip', {
         jobId,

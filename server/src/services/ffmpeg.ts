@@ -179,7 +179,7 @@ export function buildVerticalFilterComplex(params: {
 }): string {
   const { width, height, videoLayout, subtitleFilter, videoFilter } = params;
   if (videoFilter) {
-    return `[0:v]${videoFilter},unsharp=5:5:0.45:3:3:0.0,setsar=1${subtitleFilter}[vout]`;
+    return `[0:v]${videoFilter},unsharp=5:5:0.45:3:3:0.0,setsar=1,setdar=9/16${subtitleFilter}[vout]`;
   }
 
   const lanczosFlags = 'lanczos+accurate_rnd+full_chroma_int';
@@ -189,18 +189,18 @@ export function buildVerticalFilterComplex(params: {
     const blurRadius = width >= 2160 ? '36:4' : '20:3';
     return [
       `[0:v]${cropTo9x16},scale=${width}:${height}:flags=lanczos,boxblur=${blurRadius}[bg]`,
-      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=${lanczosFlags},unsharp=5:5:0.55:3:3:0.0[fg]`,
-      `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1${subtitleFilter}[vout]`,
+      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=${lanczosFlags},unsharp=5:5:0.55:3:3:0.0[fg]`,
+      `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,setdar=9/16${subtitleFilter}[vout]`,
     ].join(';');
   }
 
-  return `[0:v]${cropTo9x16},scale=${width}:${height}:flags=${lanczosFlags},unsharp=5:5:0.6:3:3:0.0,setsar=1${subtitleFilter}[vout]`;
+  return `[0:v]${cropTo9x16},scale=${width}:${height}:flags=${lanczosFlags},unsharp=5:5:0.6:3:3:0.0,setsar=1,setdar=9/16${subtitleFilter}[vout]`;
 }
 
 /**
- * YouTube 4K UHD (2160x3840) H.264 + AAC encoding arguments:
+ * YouTube 4K UHD (2160x3840, portrait 9:16 equivalent of 3840x2160) H.264 + AAC encoding arguments:
  * Visually-lossless CRF 15 with 50 Mbps VBV ceiling (High@5.2, closed GOP, 2 B-frames, AQ mode 3,
- * BT.709 color metadata, and 320 kbps 48 kHz AAC audio) — eliminates 1-pass ABR startup blur.
+ * BT.709 color metadata, square SAR / 9:16 DAR, and 320 kbps 48 kHz AAC audio).
  */
 export function buildHighQualityEncodeArgs(
   videoBitrate = '35000k',
@@ -254,6 +254,8 @@ export function buildHighQualityEncodeArgs(
     'tv',
     '-aspect',
     '9:16',
+    '-metadata:s:v:0',
+    'rotate=0',
     ...audioArgs,
     '-movflags',
     '+faststart',
