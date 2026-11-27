@@ -288,6 +288,87 @@ export async function publishToYouTubeShorts(params: {
   };
 }
 
+export interface YouTubeUploadedVideoStatus {
+  videoId: string;
+  uploadStatus: string;
+  privacyStatus: string;
+  license: string;
+  licensedContent: boolean;
+  rejectionReason?: string;
+  blockedRegionsCount: number;
+  studioEditUrl: string;
+  checkedAt: string;
+}
+
+/**
+ * Queries YouTube Data API v3 (videos.list?part=status,contentDetails) for an uploaded video
+ * to inspect processing state, Content ID licensedContent flag, and any region restrictions.
+ */
+export async function checkUploadedYouTubeVideoStatus(params: {
+  connection: YouTubeConnection;
+  videoId: string;
+}): Promise<YouTubeUploadedVideoStatus> {
+  if (!/^[A-Za-z0-9_-]{11}$/.test(params.videoId)) {
+    throw new Error('Invalid YouTube video ID.');
+  }
+
+  const activeConn = await refreshYouTubeAccessToken(params.connection);
+  const res = await fetch(
+    `https://www.googleapis.com/youtube/v3/videos?part=status,contentDetails&id=${encodeURIComponent(params.videoId)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${activeConn.accessToken}`,
+        Accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(15_000),
+    }
+  );
+
+  const data = (await res.json().catch(() => ({}))) as {
+    items?: Array<{
+      id?: string;
+      status?: {
+        uploadStatus?: string;
+        privacyStatus?: string;
+        license?: string;
+        rejectionReason?: string;
+      };
+      contentDetails?: {
+        licensedContent?: boolean;
+        regionRestriction?: {
+          blocked?: string[];
+        };
+      };
+    }>;
+    error?: { message?: string };
+  };
+
+  if (!res.ok) {
+    throw new Error(
+      data.error?.message || `Could not query YouTube video status (HTTP ${res.status}).`
+    );
+  }
+
+  const item = data.items?.[0];
+  if (!item) {
+    throw new Error(
+      'Video is still initializing on YouTube. Wait a few seconds and check status again.'
+    );
+  }
+
+  return {
+    videoId: params.videoId,
+    uploadStatus: item.status?.uploadStatus ?? 'uploaded',
+    privacyStatus: item.status?.privacyStatus ?? 'unknown',
+    license: item.status?.license ?? 'youtube',
+    licensedContent: Boolean(item.contentDetails?.licensedContent),
+    rejectionReason: item.status?.rejectionReason,
+    blockedRegionsCount: item.contentDetails?.regionRestriction?.blocked?.length ?? 0,
+    studioEditUrl: `https://studio.youtube.com/video/${params.videoId}/edit`,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
 /**
  * Publishes a vertical 9:16 MP4 directly to a connected Facebook Page as a Facebook Reel
  * using Meta's official 3-phase binary Reels upload API (works locally without a public URL).

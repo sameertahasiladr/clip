@@ -1,16 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  AlertCircle,
   Captions,
   Clock,
   Film,
+  Loader2,
   Minus,
+  Music,
   Plus,
   RectangleHorizontal,
   Smartphone,
+  Upload,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
-import type { AudioMode, ClipLength, VideoLayout } from '../types';
+import type { AudioMode, ClipLength, UploadedAudioTrackResponse, VideoLayout } from '../types';
 
 export const MIN_CLIP_COUNT = 1;
 export const MAX_CLIP_COUNT = 20;
@@ -21,12 +26,17 @@ interface OptionsRowProps {
   captions: boolean;
   videoLayout: VideoLayout;
   audioMode: AudioMode;
+  customAudioTrack: UploadedAudioTrackResponse | null;
+  isUploadingAudio: boolean;
+  audioUploadError: string | null;
   disabled?: boolean;
   onClipLengthChange: (length: ClipLength) => void;
   onClipCountChange: (count: number) => void;
   onCaptionsChange: (enabled: boolean) => void;
   onVideoLayoutChange: (layout: VideoLayout) => void;
   onAudioModeChange: (mode: AudioMode) => void;
+  onUploadCustomAudio: (file: File) => void;
+  onClearCustomAudio: () => void;
 }
 
 const CLIP_LENGTH_OPTIONS: readonly ClipLength[] = [15, 30];
@@ -60,8 +70,13 @@ const AUDIO_MODE_OPTIONS: ReadonlyArray<{
   },
   {
     value: 'mute',
-    label: 'Mute Audio (Shorts Library)',
+    label: 'Mute (Shorts Library)',
     description: 'Export silent 4K clips so you can add licensed YouTube Shorts Library music safely',
+  },
+  {
+    value: 'custom-audio',
+    label: 'Replace Audio (Royalty-Free)',
+    description: 'Replace source audio with your own royalty-free MP3/WAV/M4A track or voiceover',
   },
 ];
 
@@ -71,14 +86,20 @@ export function OptionsRow({
   captions,
   videoLayout,
   audioMode,
+  customAudioTrack,
+  isUploadingAudio,
+  audioUploadError,
   disabled = false,
   onClipLengthChange,
   onClipCountChange,
   onCaptionsChange,
   onVideoLayoutChange,
   onAudioModeChange,
+  onUploadCustomAudio,
+  onClearCustomAudio,
 }: OptionsRowProps) {
   const [draftCount, setDraftCount] = useState(String(clipCount));
+  const audioInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     setDraftCount(String(clipCount));
@@ -264,7 +285,7 @@ export function OptionsRow({
         </button>
       </div>
 
-      {/* 5. Audio track copyright mode: Original vs Mute for YouTube Shorts Audio Library */}
+      {/* 5. Audio track copyright mode: Original vs Mute vs Replace with Royalty-Free Audio */}
       <div className="flex flex-col gap-2 sm:col-span-2">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-medium text-zinc-400">
           <span className="flex items-center gap-1.5">
@@ -272,17 +293,22 @@ export function OptionsRow({
             Audio track (YouTube copyright safety)
           </span>
           <span className="text-[11px] text-zinc-500">
-            Mute removes copyrighted music so you can add licensed Shorts Audio Library tracks
+            Mute for Shorts Audio Library or swap in your own royalty-free track
           </span>
         </div>
         <div
           role="group"
           aria-label="Audio track mode"
-          className="inline-flex w-full rounded-lg bg-[#0C0C14] p-1 border border-white/[0.08]"
+          className="grid grid-cols-1 gap-1 rounded-lg border border-white/[0.08] bg-[#0C0C14] p-1 sm:grid-cols-3"
         >
           {AUDIO_MODE_OPTIONS.map((option) => {
             const active = audioMode === option.value;
-            const Icon = option.value === 'original' ? Volume2 : VolumeX;
+            const Icon =
+              option.value === 'original'
+                ? Volume2
+                : option.value === 'mute'
+                  ? VolumeX
+                  : Music;
             return (
               <button
                 key={option.value}
@@ -291,7 +317,7 @@ export function OptionsRow({
                 aria-pressed={active}
                 title={option.description}
                 onClick={() => onAudioModeChange(option.value)}
-                className={`flex-1 inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs sm:text-sm font-semibold transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400 disabled:opacity-50 ${
+                className={`inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400 disabled:opacity-50 ${
                   active
                     ? 'bg-white/[0.14] text-white'
                     : 'text-zinc-400 hover:text-zinc-100'
@@ -303,6 +329,89 @@ export function OptionsRow({
             );
           })}
         </div>
+
+        {audioMode === 'custom-audio' && (
+          <div className="mt-1 rounded-xl border border-white/[0.09] bg-[#0B0B13] p-3">
+            <input
+              ref={audioInputRef}
+              type="file"
+              accept="audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/flac,audio/webm,.mp3,.wav,.m4a,.ogg,.flac"
+              disabled={disabled || isUploadingAudio}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  onUploadCustomAudio(file);
+                }
+                e.target.value = '';
+              }}
+              className="sr-only"
+              aria-label="Upload royalty-free audio track"
+            />
+            {customAudioTrack ? (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Music className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" />
+                  <span className="truncate text-xs font-medium text-emerald-200">
+                    {customAudioTrack.filename}
+                  </span>
+                  <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-emerald-300">
+                    {customAudioTrack.format}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={disabled || isUploadingAudio}
+                    onClick={() => audioInputRef.current?.click()}
+                    className="rounded-md border border-white/[0.1] bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-200 hover:bg-white/[0.09] transition-colors"
+                  >
+                    Change file
+                  </button>
+                  <button
+                    type="button"
+                    disabled={disabled || isUploadingAudio}
+                    onClick={onClearCustomAudio}
+                    aria-label="Remove uploaded audio track"
+                    className="rounded-md p-1 text-zinc-400 hover:bg-white/[0.08] hover:text-white transition-colors"
+                  >
+                    <X className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-zinc-400">
+                  Upload your own royalty-free MP3, WAV, M4A, OGG, or FLAC track (up to 25 MB).
+                </p>
+                <button
+                  type="button"
+                  disabled={disabled || isUploadingAudio}
+                  onClick={() => audioInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-fuchsia-500/35 bg-fuchsia-500/10 px-3 py-1.5 text-xs font-semibold text-fuchsia-200 hover:bg-fuchsia-500/20 transition-colors disabled:opacity-50"
+                >
+                  {isUploadingAudio ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                      <span>Uploading...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Choose Audio Track</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {audioUploadError && (
+              <p role="alert" className="mt-2 flex items-center gap-1.5 text-xs text-rose-400">
+                <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span>{audioUploadError}</span>
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

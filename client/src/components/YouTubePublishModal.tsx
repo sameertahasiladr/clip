@@ -9,6 +9,7 @@ import {
   Hash,
   Link2,
   Loader2,
+  RefreshCw,
   Scale,
   ShieldAlert,
   ShieldCheck,
@@ -17,12 +18,14 @@ import {
   X,
   Youtube,
 } from 'lucide-react';
+import { ApiError, fetchYouTubeUploadStatus } from '../api';
 import type {
   ClipItem,
   PublishClipResponse,
   SourceCopyrightInfo,
   YouTubeLicenseType,
   YouTubePrivacyStatus,
+  YouTubeUploadedVideoStatus,
 } from '../types';
 import { copyTextToClipboard } from '../utils/download';
 import { formatDuration } from '../utils/youtube';
@@ -83,6 +86,32 @@ export function YouTubePublishModal({
   onOpenAccounts,
 }: YouTubePublishModalProps) {
   const [copiedField, setCopiedField] = useState<'title' | 'description' | null>(null);
+  const [liveStatus, setLiveStatus] = useState<YouTubeUploadedVideoStatus | null>(null);
+  const [isCheckingLiveStatus, setIsCheckingLiveStatus] = useState(false);
+  const [liveStatusError, setLiveStatusError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLiveStatus(null);
+    setLiveStatusError(null);
+  }, [publishedResult?.externalId]);
+
+  const handleCheckLiveStatus = async () => {
+    if (!publishedResult?.externalId) return;
+    setLiveStatusError(null);
+    setIsCheckingLiveStatus(true);
+    try {
+      const status = await fetchYouTubeUploadStatus(publishedResult.externalId);
+      setLiveStatus(status);
+    } catch (err) {
+      setLiveStatusError(
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : 'Could not fetch live YouTube copyright status.'
+      );
+    } finally {
+      setIsCheckingLiveStatus(false);
+    }
+  };
 
   const copyrightAssessment = useMemo(
     () =>
@@ -191,35 +220,87 @@ export function YouTubePublishModal({
         {/* Scrollable body: 2-column YouTube Studio-style Details + Video Preview */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {publishedResult && (
-            <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-500/35 bg-emerald-500/10 p-4 text-sm text-emerald-100">
-              <div className="flex items-center gap-2.5">
-                <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" aria-hidden="true" />
-                <span>
-                  Published to <strong>{publishedResult.accountLabel}</strong>!
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {publishedResult.studioEditUrl && (
+            <div className="mb-5 space-y-3 rounded-xl border border-emerald-500/35 bg-emerald-500/10 p-4 text-sm text-emerald-100">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" aria-hidden="true" />
+                  <span>
+                    Published to <strong>{publishedResult.accountLabel}</strong>!
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={isCheckingLiveStatus}
+                    onClick={() => void handleCheckLiveStatus()}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/35 bg-emerald-500/15 px-3 py-1.5 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/25 transition-colors disabled:opacity-50"
+                  >
+                    {isCheckingLiveStatus ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                    )}
+                    <span>{liveStatus ? 'Refresh Copyright Status' : 'Check Copyright Status'}</span>
+                  </button>
+                  {publishedResult.studioEditUrl && (
+                    <a
+                      href={publishedResult.studioEditUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/20 transition-colors"
+                    >
+                      <FileCheck2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>YouTube Studio Checks</span>
+                    </a>
+                  )}
                   <a
-                    href={publishedResult.studioEditUrl}
+                    href={publishedResult.publishedUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/20 transition-colors"
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/30 transition-colors"
                   >
-                    <FileCheck2 className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Check Copyright in Studio</span>
+                    <span>Open on YouTube</span>
+                    <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
                   </a>
-                )}
-                <a
-                  href={publishedResult.publishedUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/30 transition-colors"
-                >
-                  <span>Open on YouTube</span>
-                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-                </a>
+                </div>
               </div>
+
+              {liveStatusError && (
+                <p className="text-xs text-amber-200">{liveStatusError}</p>
+              )}
+
+              {liveStatus && (
+                <div className="rounded-lg border border-white/[0.1] bg-[#0B0B13]/80 px-3 py-2.5 text-xs text-zinc-200">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-white">Live YouTube API Check:</span>
+                    <span className="rounded bg-white/[0.08] px-2 py-0.5 capitalize">
+                      Upload: {liveStatus.uploadStatus}
+                    </span>
+                    <span className="rounded bg-white/[0.08] px-2 py-0.5 capitalize">
+                      Visibility: {liveStatus.privacyStatus}
+                    </span>
+                    <span
+                      className={`rounded px-2 py-0.5 font-semibold ${
+                        liveStatus.licensedContent || liveStatus.rejectionReason
+                          ? 'bg-amber-500/20 text-amber-200'
+                          : 'bg-emerald-500/20 text-emerald-200'
+                      }`}
+                    >
+                      {liveStatus.rejectionReason
+                        ? `Rejected: ${liveStatus.rejectionReason}`
+                        : liveStatus.licensedContent
+                          ? 'Licensed / Content ID Signal Detected'
+                          : 'No Content ID Claim Flagged'}
+                    </span>
+                    {liveStatus.blockedRegionsCount > 0 && (
+                      <span className="rounded bg-rose-500/20 px-2 py-0.5 font-semibold text-rose-200">
+                        Blocked in {liveStatus.blockedRegionsCount}{' '}
+                        {liveStatus.blockedRegionsCount === 1 ? 'region' : 'regions'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

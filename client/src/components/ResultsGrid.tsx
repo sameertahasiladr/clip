@@ -1,5 +1,6 @@
 import {
   Link2,
+  Music,
   RotateCcw,
   ShieldAlert,
   ShieldCheck,
@@ -121,6 +122,12 @@ export function ResultsGrid({
                     <span className="inline-flex items-center gap-1 rounded-md bg-white/[0.08] px-2 py-0.5 text-[11px] font-medium text-zinc-200">
                       <VolumeX className="h-3 w-3 text-fuchsia-300" aria-hidden="true" />
                       Muted for Shorts Audio Library
+                    </span>
+                  )}
+                  {sourceCopyright.audioMode === 'custom-audio' && (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-200">
+                      <Music className="h-3 w-3 text-emerald-300" aria-hidden="true" />
+                      Royalty-Free Audio Track Applied
                     </span>
                   )}
                 </div>

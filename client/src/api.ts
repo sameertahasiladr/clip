@@ -10,7 +10,10 @@ import type {
   PublishClipResponse,
   SocialAccountsState,
   SocialPlatform,
+  SourceCopyrightInfo,
+  UploadedAudioTrackResponse,
   VideoLayout,
+  YouTubeUploadedVideoStatus,
 } from './types';
 import { validateYouTubeUrl } from './utils/youtube';
 
@@ -522,5 +525,97 @@ export async function publishClipToSocial(
     studioEditUrl: data.studioEditUrl,
     accountLabel: data.accountLabel ?? payload.platform,
   };
+}
+
+export async function checkYouTubeCopyright(url: string): Promise<SourceCopyrightInfo> {
+  const response = await fetch(`${API_BASE_URL}/api/copyright-check`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ url }),
+  });
+
+  const data = (await response.json().catch(() => ({}))) as Partial<SourceCopyrightInfo> & {
+    error?: string;
+    code?: string;
+  };
+
+  if (!response.ok || !data.videoId) {
+    throw new ApiError(
+      data.error ?? `Could not check copyright details (HTTP ${response.status}).`,
+      response.status,
+      data.code
+    );
+  }
+
+  return data as SourceCopyrightInfo;
+}
+
+export async function uploadCustomAudioTrack(file: File): Promise<UploadedAudioTrackResponse> {
+  const params = new URLSearchParams({ filename: file.name });
+  const contentType =
+    file.type && file.type.startsWith('audio/') ? file.type : 'application/octet-stream';
+
+  const response = await fetch(`${API_BASE_URL}/api/audio-tracks?${params.toString()}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': contentType,
+      Accept: 'application/json',
+    },
+    body: file,
+  });
+
+  const data = (await response.json().catch(() => ({}))) as Partial<UploadedAudioTrackResponse> & {
+    error?: string;
+    code?: string;
+  };
+
+  if (!response.ok || !data.audioTrackId) {
+    throw new ApiError(
+      data.error ?? `Could not upload royalty-free audio track (HTTP ${response.status}).`,
+      response.status,
+      data.code
+    );
+  }
+
+  return {
+    audioTrackId: data.audioTrackId,
+    filename: data.filename ?? file.name,
+    format: data.format ?? 'mp3',
+    sizeBytes: data.sizeBytes ?? file.size,
+  };
+}
+
+export async function fetchYouTubeUploadStatus(
+  videoId: string
+): Promise<YouTubeUploadedVideoStatus> {
+  const token = await ensureSocialSessionToken();
+  const response = await fetch(
+    `${API_BASE_URL}/api/social/youtube/status/${encodeURIComponent(videoId)}`,
+    {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );
+
+  const data = (await response.json().catch(() => ({}))) as Partial<YouTubeUploadedVideoStatus> & {
+    error?: string;
+    code?: string;
+  };
+
+  if (!response.ok || !data.videoId) {
+    throw new ApiError(
+      data.error ?? `Could not check YouTube video status (HTTP ${response.status}).`,
+      response.status,
+      data.code
+    );
+  }
+
+  return data as YouTubeUploadedVideoStatus;
 }
 

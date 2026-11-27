@@ -13,6 +13,7 @@ import {
   getSocialOAuthConfigStatus,
 } from '../services/socialOAuth.js';
 import {
+  checkUploadedYouTubeVideoStatus,
   publishToFacebookPageReels,
   publishToInstagramReels,
   publishToYouTubeShorts,
@@ -355,6 +356,45 @@ export function createSocialRouter(deps: { jobStore: JobStore }): express.Router
           err instanceof Error ? err.message : 'Failed to publish clip to social platform.',
           502,
           'PUBLISH_FAILED'
+        )
+      );
+    }
+  });
+
+  // Checks YouTube Data API v3 upload/processing and Content ID licensedContent status for an uploaded Short
+  router.get('/youtube/status/:videoId', async (req, res, next) => {
+    try {
+      const token = extractBearerSessionToken(req);
+      const session = token ? socialAccountStore.getSession(token) : null;
+      if (!session?.youtube) {
+        throw new AppError(
+          'Connect your YouTube channel first to check upload copyright status.',
+          401,
+          'YOUTUBE_NOT_CONNECTED'
+        );
+      }
+
+      const videoId = req.params.videoId;
+      if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+        throw new AppError('Invalid YouTube video ID.', 400, 'INVALID_VIDEO_ID');
+      }
+
+      const status = await checkUploadedYouTubeVideoStatus({
+        connection: session.youtube,
+        videoId,
+      });
+
+      res.json(status);
+    } catch (err) {
+      if (err instanceof AppError) {
+        next(err);
+        return;
+      }
+      next(
+        new AppError(
+          err instanceof Error ? err.message : 'Could not fetch YouTube video status.',
+          502,
+          'YOUTUBE_STATUS_FAILED'
         )
       );
     }

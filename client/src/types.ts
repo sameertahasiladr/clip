@@ -2,7 +2,7 @@ export type ClipLength = 15 | 30;
 
 export type VideoLayout = 'vertical-fill' | 'vertical-blur';
 
-export type AudioMode = 'original' | 'mute';
+export type AudioMode = 'original' | 'mute' | 'custom-audio';
 
 export type YouTubeLicenseType = 'youtube' | 'creativeCommon';
 
@@ -42,6 +42,14 @@ export interface CreateJobPayload {
   captions: boolean;
   videoLayout: VideoLayout;
   audioMode: AudioMode;
+  customAudioTrackId?: string;
+}
+
+export interface UploadedAudioTrackResponse {
+  audioTrackId: string;
+  filename: string;
+  format: string;
+  sizeBytes: number;
 }
 
 export interface CreateJobResponse {
@@ -144,5 +152,17 @@ export interface PublishClipResponse {
   publishedUrl: string;
   studioEditUrl?: string;
   accountLabel: string;
+}
+
+export interface YouTubeUploadedVideoStatus {
+  videoId: string;
+  uploadStatus: string;
+  privacyStatus: string;
+  license: string;
+  licensedContent: boolean;
+  rejectionReason?: string;
+  blockedRegionsCount: number;
+  studioEditUrl: string;
+  checkedAt: string;
 }
 

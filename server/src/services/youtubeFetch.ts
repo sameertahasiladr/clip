@@ -96,6 +96,75 @@ export function detectSourceCopyrightSignals(params: {
   return { sourceLicense, hasLicensedMusicSignals };
 }
 
+/**
+ * Fast pre-clip copyright & license inspection (fetches only oEmbed + watch HTML without
+ * probing media streams) so creators can check ownership, Creative Commons license, and
+ * music-rights notices before rendering 4K clips.
+ */
+export async function inspectYouTubeCopyright(
+  videoId: string,
+  canonicalUrl: string
+): Promise<{
+  videoId: string;
+  title: string;
+  channelName: string;
+  channelId?: string;
+  canonicalUrl: string;
+  sourceLicense: YouTubeLicenseType | 'unknown';
+  category?: string;
+  hasLicensedMusicSignals: boolean;
+}> {
+  const authCookies = await loadConfiguredYouTubeCookies();
+  const watchHeaders: Record<string, string> = {
+    'User-Agent': WEB_UA,
+    'Accept-Language': 'en-US,en;q=0.9',
+    ...(authCookies?.cookieHeader ? { Cookie: authCookies.cookieHeader } : {}),
+  };
+
+  const [oembedResult, htmlResult] = await Promise.allSettled([
+    fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(canonicalUrl)}&format=json`, {
+      signal: AbortSignal.timeout(8_000),
+    }).then(async (r) => (r.ok ? ((await r.json()) as { title?: string; author_name?: string }) : null)),
+    fetch(canonicalUrl, {
+      headers: watchHeaders,
+      signal: AbortSignal.timeout(10_000),
+    }).then(async (r) => (r.ok ? r.text() : '')),
+  ]);
+
+  const oembed = oembedResult.status === 'fulfilled' ? oembedResult.value : null;
+  const html = htmlResult.status === 'fulfilled' ? htmlResult.value : '';
+
+  if (!oembed && !html) {
+    throw new Error('Could not reach YouTube to inspect this video link.');
+  }
+
+  const webPlayer = html
+    ? (extractBalancedJson(html, 'var ytInitialPlayerResponse = ') as InnertubePlayerData | null)
+    : null;
+  const webVideoDetails = webPlayer?.videoDetails ?? {};
+  const webMicroformat = webPlayer?.microformat?.playerMicroformatRenderer ?? {};
+
+  const title = webVideoDetails.title || oembed?.title || 'YouTube Video';
+  const channelName =
+    webVideoDetails.author || webMicroformat.ownerChannelName || oembed?.author_name || 'YouTube Creator';
+  const channelId = webVideoDetails.channelId || webMicroformat.externalChannelId || undefined;
+  const category = webMicroformat.category || undefined;
+  const description = webVideoDetails.shortDescription ?? '';
+
+  const signals = detectSourceCopyrightSignals({ html, description, category });
+
+  return {
+    videoId,
+    title,
+    channelName,
+    channelId,
+    canonicalUrl,
+    sourceLicense: signals.sourceLicense,
+    category,
+    hasLicensedMusicSignals: signals.hasLicensedMusicSignals,
+  };
+}
+
 export interface ParsedNetscapeCookie {
   domain: string;
   name: string;

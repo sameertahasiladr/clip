@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   ApiError,
+  checkYouTubeCopyright,
   createJob,
   disconnectSocialAccount,
   fetchSocialAccounts,
   getJobStatus,
   getSocialOAuthUrl,
   selectMetaPage,
+  uploadCustomAudioTrack,
 } from './api';
 import { EmptyPreview } from './components/EmptyPreview';
 import { ErrorState } from './components/ErrorState';
@@ -25,6 +27,7 @@ import type {
   SocialAccountsState,
   SocialPlatform,
   SourceCopyrightInfo,
+  UploadedAudioTrackResponse,
   VideoLayout,
   YouTubePrivacyStatus,
 } from './types';
@@ -54,6 +57,12 @@ export default function App() {
   const [captions, setCaptions] = useState<boolean>(true);
   const [videoLayout, setVideoLayout] = useState<VideoLayout>('vertical-fill');
   const [audioMode, setAudioMode] = useState<AudioMode>('original');
+  const [customAudioTrack, setCustomAudioTrack] = useState<UploadedAudioTrackResponse | null>(null);
+  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
+  const [audioUploadError, setAudioUploadError] = useState<string | null>(null);
+  const [preCheckCopyright, setPreCheckCopyright] = useState<SourceCopyrightInfo | null>(null);
+  const [isCheckingCopyright, setIsCheckingCopyright] = useState(false);
+  const [preCheckError, setPreCheckError] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const [viewState, setViewState] = useState<ViewState>('idle');
@@ -252,6 +261,55 @@ export default function App() {
     if (validationError) {
       setValidationError(null);
     }
+    if (preCheckCopyright) {
+      setPreCheckCopyright(null);
+    }
+    if (preCheckError) {
+      setPreCheckError(null);
+    }
+  };
+
+  const handleCheckCopyright = async () => {
+    const validation = validateYouTubeUrl(url);
+    if (!validation.valid || !validation.canonicalUrl) {
+      setValidationError(validation.error ?? 'Please enter a valid YouTube link.');
+      return;
+    }
+
+    setValidationError(null);
+    setPreCheckError(null);
+    setIsCheckingCopyright(true);
+    try {
+      const info = await checkYouTubeCopyright(validation.canonicalUrl);
+      setPreCheckCopyright(info);
+    } catch (err) {
+      setPreCheckCopyright(null);
+      setPreCheckError(
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : 'Unable to check copyright details for this YouTube video.'
+      );
+    } finally {
+      setIsCheckingCopyright(false);
+    }
+  };
+
+  const handleUploadCustomAudio = async (file: File) => {
+    setAudioUploadError(null);
+    setIsUploadingAudio(true);
+    try {
+      const uploaded = await uploadCustomAudioTrack(file);
+      setCustomAudioTrack(uploaded);
+      setAudioMode('custom-audio');
+    } catch (err) {
+      setAudioUploadError(
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : 'Could not upload audio file. Please use MP3, WAV, M4A, OGG, or FLAC under 25 MB.'
+      );
+    } finally {
+      setIsUploadingAudio(false);
+    }
   };
 
   const handleReset = () => {
@@ -263,12 +321,16 @@ export default function App() {
     setJobError(null);
     setClips([]);
     setSourceCopyright(null);
+    setPreCheckCopyright(null);
+    setPreCheckError(null);
     setValidationError(null);
   };
 
   const handleFillDemoUrl = () => {
     setUrl(SAMPLE_YOUTUBE_URL);
     setValidationError(null);
+    setPreCheckCopyright(null);
+    setPreCheckError(null);
     const input = document.getElementById('youtube-url-input');
     input?.focus();
   };
@@ -281,7 +343,13 @@ export default function App() {
       return;
     }
 
+    if (audioMode === 'custom-audio' && !customAudioTrack) {
+      setAudioUploadError('Upload a royalty-free audio file first, or switch back to Original/Mute audio.');
+      return;
+    }
+
     setValidationError(null);
+    setAudioUploadError(null);
     setJobError(null);
     setIsSubmitting(true);
 
@@ -294,6 +362,8 @@ export default function App() {
         captions,
         videoLayout,
         audioMode,
+        customAudioTrackId:
+          audioMode === 'custom-audio' ? customAudioTrack?.audioTrackId : undefined,
       });
 
       setSubmittedUrl(validation.canonicalUrl);
@@ -339,6 +409,13 @@ export default function App() {
               captions={captions}
               videoLayout={videoLayout}
               audioMode={audioMode}
+              customAudioTrack={customAudioTrack}
+              isUploadingAudio={isUploadingAudio}
+              audioUploadError={audioUploadError}
+              preCheckCopyright={preCheckCopyright}
+              isCheckingCopyright={isCheckingCopyright}
+              preCheckError={preCheckError}
+              connectedChannelId={socialAccounts?.youtube?.channelId ?? null}
               validationError={validationError}
               isSubmitting={isSubmitting}
               onUrlChange={handleUrlChange}
@@ -346,7 +423,16 @@ export default function App() {
               onClipCountChange={setClipCount}
               onCaptionsChange={setCaptions}
               onVideoLayoutChange={setVideoLayout}
-              onAudioModeChange={setAudioMode}
+              onAudioModeChange={(mode) => {
+                setAudioMode(mode);
+                setAudioUploadError(null);
+              }}
+              onUploadCustomAudio={(file) => void handleUploadCustomAudio(file)}
+              onClearCustomAudio={() => {
+                setCustomAudioTrack(null);
+                setAudioUploadError(null);
+              }}
+              onCheckCopyright={() => void handleCheckCopyright()}
               onSubmit={handleSubmit}
             />
             <EmptyPreview />

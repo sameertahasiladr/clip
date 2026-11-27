@@ -187,6 +187,39 @@ test('evaluateYouTubeCopyrightStatus and appendAttributionSafely classify owners
   assert.equal(musicCaution.level, 'caution');
   assert.equal(musicCaution.recommendedPrivacy, 'unlisted');
   assert.ok(musicCaution.recommendations.some((r) => r.includes('Mute Audio')));
+
+  const customAudioAssessment = evaluateYouTubeCopyrightStatus(
+    {
+      title: 'Official Music Video',
+      channelName: 'Record Label',
+      channelId: 'UC_LABEL_1',
+      canonicalUrl: 'https://www.youtube.com/watch?v=xyz123-_ABC',
+      sourceLicense: 'youtube',
+      category: 'Music',
+      hasLicensedMusicSignals: true,
+      audioMode: 'custom-audio',
+    },
+    'UC_OWN_123'
+  );
+  assert.equal(customAudioAssessment.level, 'caution');
+  assert.ok(
+    customAudioAssessment.recommendations[0].includes('royalty-free audio track')
+  );
+
+  const mutedAssessment = evaluateYouTubeCopyrightStatus(
+    {
+      title: 'Official Music Video',
+      channelName: 'Record Label',
+      channelId: 'UC_LABEL_1',
+      canonicalUrl: 'https://www.youtube.com/watch?v=xyz123-_ABC',
+      sourceLicense: 'youtube',
+      category: 'Music',
+      hasLicensedMusicSignals: true,
+      audioMode: 'mute',
+    },
+    'UC_OWN_123'
+  );
+  assert.ok(mutedAssessment.recommendations[0].includes('Audio was muted cleanly'));
 });
 
 

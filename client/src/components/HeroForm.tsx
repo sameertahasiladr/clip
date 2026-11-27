@@ -1,6 +1,22 @@
 import type { FormEvent } from 'react';
-import { AlertCircle, ArrowRight, Link2, Loader2 } from 'lucide-react';
-import type { AudioMode, ClipLength, VideoLayout } from '../types';
+import {
+  AlertCircle,
+  ArrowRight,
+  Link2,
+  Loader2,
+  Music,
+  ShieldAlert,
+  ShieldCheck,
+  VolumeX,
+} from 'lucide-react';
+import type {
+  AudioMode,
+  ClipLength,
+  SourceCopyrightInfo,
+  UploadedAudioTrackResponse,
+  VideoLayout,
+} from '../types';
+import { evaluateYouTubeCopyrightStatus } from '../utils/youtubeMetadata';
 import { OptionsRow } from './OptionsRow';
 
 interface HeroFormProps {
@@ -10,6 +26,13 @@ interface HeroFormProps {
   captions: boolean;
   videoLayout: VideoLayout;
   audioMode: AudioMode;
+  customAudioTrack: UploadedAudioTrackResponse | null;
+  isUploadingAudio: boolean;
+  audioUploadError: string | null;
+  preCheckCopyright: SourceCopyrightInfo | null;
+  isCheckingCopyright: boolean;
+  preCheckError: string | null;
+  connectedChannelId: string | null;
   validationError: string | null;
   isSubmitting: boolean;
   onUrlChange: (value: string) => void;
@@ -18,6 +41,9 @@ interface HeroFormProps {
   onCaptionsChange: (enabled: boolean) => void;
   onVideoLayoutChange: (layout: VideoLayout) => void;
   onAudioModeChange: (mode: AudioMode) => void;
+  onUploadCustomAudio: (file: File) => void;
+  onClearCustomAudio: () => void;
+  onCheckCopyright: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }
 
@@ -28,6 +54,13 @@ export function HeroForm({
   captions,
   videoLayout,
   audioMode,
+  customAudioTrack,
+  isUploadingAudio,
+  audioUploadError,
+  preCheckCopyright,
+  isCheckingCopyright,
+  preCheckError,
+  connectedChannelId,
   validationError,
   isSubmitting,
   onUrlChange,
@@ -36,8 +69,18 @@ export function HeroForm({
   onCaptionsChange,
   onVideoLayoutChange,
   onAudioModeChange,
+  onUploadCustomAudio,
+  onClearCustomAudio,
+  onCheckCopyright,
   onSubmit,
 }: HeroFormProps) {
+  const preCheckAssessment = preCheckCopyright
+    ? evaluateYouTubeCopyrightStatus(
+        { ...preCheckCopyright, audioMode },
+        connectedChannelId
+      )
+    : null;
+
   return (
     <section id="generator" className="mx-auto max-w-4xl pt-12 pb-8 sm:pt-16 sm:pb-12">
       <div className="text-center">
@@ -49,7 +92,7 @@ export function HeroForm({
         </h1>
         <p className="mx-auto mt-5 max-w-2xl text-base text-zinc-400 sm:text-lg leading-relaxed">
           Paste a YouTube link and let ClipGenie download the video, find the strongest hooks,
-          reframe to 9:16 vertical HD, and export ready-to-post Shorts and Reels.
+          reframe to 4K 9:16 vertical, and export ready-to-post Shorts and Reels.
         </p>
       </div>
 
@@ -91,7 +134,7 @@ export function HeroForm({
 
           <button
             type="submit"
-            disabled={isSubmitting}
+            disabled={isSubmitting || isUploadingAudio}
             className="inline-flex h-13 min-w-[180px] items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 via-fuchsia-600 to-pink-600 px-6 text-sm sm:text-base font-semibold text-white shadow-lg shadow-fuchsia-950/40 hover:brightness-110 active:scale-[0.99] transition-all duration-150 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#12121C] disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {isSubmitting ? (
@@ -108,19 +151,116 @@ export function HeroForm({
           </button>
         </div>
 
-        {validationError ? (
-          <p
-            id="youtube-url-error"
-            role="alert"
-            className="mt-3 flex items-center gap-2 text-sm text-rose-400"
+        <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+          {validationError ? (
+            <p
+              id="youtube-url-error"
+              role="alert"
+              className="flex items-center gap-2 text-sm text-rose-400"
+            >
+              <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>{validationError}</span>
+            </p>
+          ) : (
+            <p id="youtube-url-hint" className="text-xs text-zinc-500">
+              Supports youtube.com/watch, youtu.be, and youtube.com/shorts links up to 60 minutes.
+            </p>
+          )}
+
+          <button
+            type="button"
+            disabled={isSubmitting || isCheckingCopyright || !url.trim()}
+            onClick={onCheckCopyright}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.1] bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-zinc-200 hover:border-fuchsia-400/40 hover:bg-fuchsia-500/10 hover:text-white transition-colors disabled:opacity-45"
           >
-            <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>{validationError}</span>
+            {isCheckingCopyright ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-fuchsia-300" aria-hidden="true" />
+                <span>Checking license...</span>
+              </>
+            ) : (
+              <>
+                <ShieldCheck className="h-3.5 w-3.5 text-fuchsia-300" aria-hidden="true" />
+                <span>Check Copyright Before Clipping</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {preCheckError && (
+          <p role="alert" className="mt-2.5 flex items-center gap-1.5 text-xs text-rose-400">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span>{preCheckError}</span>
           </p>
-        ) : (
-          <p id="youtube-url-hint" className="mt-2.5 text-xs text-zinc-500">
-            Supports youtube.com/watch, youtu.be, and youtube.com/shorts links up to 60 minutes.
-          </p>
+        )}
+
+        {preCheckCopyright && preCheckAssessment && (
+          <div
+            data-testid="precheck-copyright-banner"
+            className={`mt-3 rounded-xl border p-3.5 ${
+              preCheckAssessment.level === 'owned'
+                ? 'border-emerald-500/30 bg-emerald-500/[0.07]'
+                : preCheckAssessment.level === 'cc-by'
+                  ? 'border-sky-500/30 bg-sky-500/[0.07]'
+                  : 'border-amber-500/30 bg-amber-500/[0.07]'
+            }`}
+          >
+            <div className="flex items-start gap-2.5">
+              {preCheckAssessment.level === 'caution' ? (
+                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
+              ) : (
+                <ShieldCheck
+                  className={`mt-0.5 h-4 w-4 shrink-0 ${
+                    preCheckAssessment.level === 'owned' ? 'text-emerald-400' : 'text-sky-400'
+                  }`}
+                  aria-hidden="true"
+                />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="truncate text-xs font-semibold text-white">
+                    {preCheckCopyright.title}
+                  </p>
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                      preCheckAssessment.level === 'owned'
+                        ? 'bg-emerald-500/20 text-emerald-200'
+                        : preCheckAssessment.level === 'cc-by'
+                          ? 'bg-sky-500/20 text-sky-200'
+                          : 'bg-amber-500/20 text-amber-200'
+                    }`}
+                  >
+                    {preCheckAssessment.badgeLabel}
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] leading-relaxed text-zinc-300">
+                  Channel: <strong className="text-zinc-100">{preCheckCopyright.channelName}</strong>
+                  {preCheckCopyright.category ? ` · ${preCheckCopyright.category}` : ''} —{' '}
+                  {preCheckAssessment.summary}
+                </p>
+                {preCheckCopyright.hasLicensedMusicSignals && audioMode === 'original' && (
+                  <div className="mt-2.5 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onAudioModeChange('mute')}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-amber-400/35 bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-100 hover:bg-amber-500/25 transition-colors"
+                    >
+                      <VolumeX className="h-3 w-3" aria-hidden="true" />
+                      <span>Switch to Mute (Shorts Library)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onAudioModeChange('custom-audio')}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-fuchsia-400/35 bg-fuchsia-500/15 px-2.5 py-1 text-[11px] font-semibold text-fuchsia-100 hover:bg-fuchsia-500/25 transition-colors"
+                    >
+                      <Music className="h-3 w-3" aria-hidden="true" />
+                      <span>Replace with Royalty-Free Audio</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         )}
 
         <OptionsRow
@@ -129,12 +269,17 @@ export function HeroForm({
           captions={captions}
           videoLayout={videoLayout}
           audioMode={audioMode}
+          customAudioTrack={customAudioTrack}
+          isUploadingAudio={isUploadingAudio}
+          audioUploadError={audioUploadError}
           disabled={isSubmitting}
           onClipLengthChange={onClipLengthChange}
           onClipCountChange={onClipCountChange}
           onCaptionsChange={onCaptionsChange}
           onVideoLayoutChange={onVideoLayoutChange}
           onAudioModeChange={onAudioModeChange}
+          onUploadCustomAudio={onUploadCustomAudio}
+          onClearCustomAudio={onClearCustomAudio}
         />
       </form>
     </section>
