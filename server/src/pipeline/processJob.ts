@@ -31,6 +31,10 @@ export const AUDIO_TRACKS_BASE_DIR = path.resolve(os.tmpdir(), 'clipgenie-audio'
 export const VERTICAL_4K_WIDTH = 2160 as const;
 export const VERTICAL_4K_HEIGHT = 3840 as const;
 export const VERTICAL_4K_RESOLUTION = '2160x3840' as const;
+export const VERTICAL_4K_SCALE_FILTER = 'scale=2160:3840' as const;
+export const VERTICAL_4K_VIDEO_CODEC = 'libx264' as const;
+export const VERTICAL_4K_CRF = 18 as const;
+export const VERTICAL_4K_PRESET = 'slow' as const;
 export const VERTICAL_4K_TARGET_BITRATE = '35000k';
 
 const ALLOWED_AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.ogg', '.flac', '.webm'] as const;
@@ -530,6 +534,10 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
         videoLayout: job.videoLayout,
         audioMode: job.audioMode ?? 'original',
         customAudioPath,
+        scaleFilter: VERTICAL_4K_SCALE_FILTER,
+        videoCodec: VERTICAL_4K_VIDEO_CODEC,
+        crf: VERTICAL_4K_CRF,
+        preset: VERTICAL_4K_PRESET,
         videoBitrate: VERTICAL_4K_TARGET_BITRATE,
         resolution: VERTICAL_4K_RESOLUTION,
       });

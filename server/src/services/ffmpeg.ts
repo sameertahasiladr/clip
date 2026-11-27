@@ -165,6 +165,14 @@ export interface RenderedClipArtifacts {
 
 export type ClipResolution = '720x1280' | '1080x1920' | '2160x3840';
 
+export type VideoCodec = 'libx264' | 'libx265';
+
+export interface HighQualityEncodeOptions {
+  videoCodec?: VideoCodec;
+  crf?: number;
+  preset?: string;
+}
+
 /**
  * Builds the FFmpeg filter_complex string for either:
  * - 'vertical-fill': crops to exact 9:16 first (even dimensions) then Lanczos-scales cleanly to 4K 2160x3840
@@ -176,76 +184,92 @@ export function buildVerticalFilterComplex(params: {
   videoLayout: VideoLayout;
   subtitleFilter: string;
   videoFilter?: string;
+  scaleFilter?: string;
 }): string {
-  const { width, height, videoLayout, subtitleFilter, videoFilter } = params;
+  const { width, height, videoLayout, subtitleFilter, videoFilter, scaleFilter } = params;
   if (videoFilter) {
     return `[0:v]${videoFilter},cas=strength=0.4,setsar=1,setdar=9/16${subtitleFilter}[vout]`;
   }
 
+  const baseScale = scaleFilter ?? `scale=${width}:${height}`;
   const lanczosFlags = 'lanczos+accurate_rnd+full_chroma_int';
   const cropTo9x16 = "crop='trunc(min(iw,ih*9/16)/2)*2':'trunc(min(ih,iw*16/9)/2)*2'";
 
   if (videoLayout === 'vertical-blur') {
     const blurRadius = width >= 2160 ? '36:4' : '20:3';
     return [
-      `[0:v]${cropTo9x16},scale=${width}:${height}:flags=lanczos,boxblur=${blurRadius}[bg]`,
-      `[0:v]hqdn3d=1.2:1.2:3:3,scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=${lanczosFlags},cas=strength=0.4[fg]`,
+      `[0:v]${cropTo9x16},${baseScale}:flags=lanczos,boxblur=${blurRadius}[bg]`,
+      `[0:v]hqdn3d=1.2:1.2:3:3,${baseScale}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=${lanczosFlags},cas=strength=0.4[fg]`,
       `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,setdar=9/16${subtitleFilter}[vout]`,
     ].join(';');
   }
 
-  return `[0:v]${cropTo9x16},hqdn3d=1.2:1.2:3:3,scale=${width}:${height}:flags=${lanczosFlags},cas=strength=0.45,setsar=1,setdar=9/16${subtitleFilter}[vout]`;
+  return `[0:v]${cropTo9x16},hqdn3d=1.2:1.2:3:3,${baseScale}:flags=${lanczosFlags},cas=strength=0.45,setsar=1,setdar=9/16${subtitleFilter}[vout]`;
 }
 
 /**
- * YouTube 4K UHD (2160x3840, portrait 9:16 equivalent of 3840x2160) H.264 + AAC encoding arguments:
- * Visually-lossless CRF 14 with 60 Mbps VBV ceiling (High@5.2, closed GOP, 2 B-frames, AQ mode 3,
- * BT.709 color metadata, square SAR / 9:16 DAR, and 320 kbps 48 kHz AAC audio).
+ * YouTube 4K UHD (2160x3840, portrait 9:16 equivalent of 3840x2160) H.264/HEVC + AAC encoding arguments:
+ * High-fidelity CRF 18 with -preset slow, 60 Mbps VBV ceiling (High@5.2 for libx264), closed GOP,
+ * 2 B-frames, AQ mode 3, BT.709 color metadata, square SAR / 9:16 DAR, and 320 kbps 48 kHz AAC audio.
  */
 export function buildHighQualityEncodeArgs(
   videoBitrate = '35000k',
   resolution: ClipResolution = '2160x3840',
-  includeAudio = true
+  includeAudio = true,
+  options: HighQualityEncodeOptions = {}
 ): string[] {
   const is4K = resolution === '2160x3840';
+  const videoCodec: VideoCodec = options.videoCodec ?? 'libx264';
   const level = is4K ? '5.2' : '4.2';
-  const crf = is4K ? '14' : '15';
+  const crf = String(options.crf ?? 18);
+  const preset = options.preset ?? 'slow';
   const requestedKbps = Number.parseInt(videoBitrate.replace(/[^\d]/g, ''), 10) || (is4K ? 35000 : 10000);
   const maxRateKbps = is4K ? Math.max(60000, requestedKbps) : Math.max(18000, requestedKbps);
   const bufSizeKbps = Math.round(maxRateKbps * 1.5);
-  const preset = is4K ? 'fast' : 'medium';
 
   const audioArgs = includeAudio
     ? ['-c:a', 'aac', '-b:a', '320k', '-ar', '48000']
     : ['-an'];
 
+  const codecSpecificArgs =
+    videoCodec === 'libx265'
+      ? [
+          '-tag:v',
+          'hvc1',
+          '-x265-params',
+          `vbv-maxrate=${maxRateKbps}:vbv-bufsize=${bufSizeKbps}:aq-mode=3:aq-strength=1.1`,
+        ]
+      : [
+          '-profile:v',
+          'high',
+          '-level:v',
+          level,
+          '-maxrate',
+          `${maxRateKbps}k`,
+          '-bufsize',
+          `${bufSizeKbps}k`,
+          '-g',
+          '60',
+          '-keyint_min',
+          '30',
+          '-bf',
+          '2',
+          '-flags',
+          '+cgop',
+          '-x264-params',
+          'aq-mode=3:aq-strength=1.1:deblock=-1,-1:rc-lookahead=40',
+        ];
+
   return [
     '-sws_flags',
     'lanczos+accurate_rnd+full_chroma_int',
     '-c:v',
-    'libx264',
-    '-profile:v',
-    'high',
-    '-level:v',
-    level,
+    videoCodec,
     '-preset',
     preset,
     '-crf',
     crf,
-    '-maxrate',
-    `${maxRateKbps}k`,
-    '-bufsize',
-    `${bufSizeKbps}k`,
-    '-g',
-    '60',
-    '-keyint_min',
-    '30',
-    '-bf',
-    '2',
-    '-flags',
-    '+cgop',
-    '-x264-params',
-    'aq-mode=3:aq-strength=1.1:deblock=-1,-1:rc-lookahead=40',
+    ...codecSpecificArgs,
     '-pix_fmt',
     'yuv420p',
     '-color_primaries',
@@ -289,6 +313,10 @@ export async function renderVerticalClip(params: {
   audioMode?: AudioMode;
   customAudioPath?: string;
   videoFilter?: string;
+  scaleFilter?: string;
+  videoCodec?: VideoCodec;
+  crf?: number;
+  preset?: string;
   videoBitrate?: string;
   resolution?: ClipResolution;
 }): Promise<RenderedClipArtifacts> {
@@ -304,6 +332,10 @@ export async function renderVerticalClip(params: {
     audioMode = 'original',
     customAudioPath,
     videoFilter,
+    scaleFilter,
+    videoCodec = 'libx264',
+    crf = 18,
+    preset = 'slow',
     resolution = '2160x3840',
     videoBitrate = resolution === '2160x3840' ? '35000k' : '10000k',
   } = params;
@@ -348,6 +380,7 @@ export async function renderVerticalClip(params: {
     videoLayout,
     subtitleFilter,
     videoFilter,
+    scaleFilter,
   });
 
   const inputArgs: string[] = ['-y', '-loglevel', 'error'];
@@ -383,9 +416,16 @@ export async function renderVerticalClip(params: {
     ffmpegArgs.push('-map', '0:a?');
   }
 
-  ffmpegArgs.push(...buildHighQualityEncodeArgs(videoBitrate, resolution, includeAudio), outputFilename);
+  ffmpegArgs.push(
+    ...buildHighQualityEncodeArgs(videoBitrate, resolution, includeAudio, {
+      videoCodec,
+      crf,
+      preset,
+    }),
+    outputFilename
+  );
 
-  await execFileAsync('ffmpeg', ffmpegArgs, { cwd: resolvedBase, timeout: 10 * 60_000 });
+  await execFileAsync('ffmpeg', ffmpegArgs, { cwd: resolvedBase, timeout: 20 * 60_000 });
 
   await fs.access(outputPath);
 

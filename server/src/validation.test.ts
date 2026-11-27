@@ -16,9 +16,13 @@ import {
   parseSubtitlesToSegments,
 } from './services/ytdlp.js';
 import {
+  VERTICAL_4K_CRF,
   VERTICAL_4K_HEIGHT,
+  VERTICAL_4K_PRESET,
   VERTICAL_4K_RESOLUTION,
+  VERTICAL_4K_SCALE_FILTER,
   VERTICAL_4K_TARGET_BITRATE,
+  VERTICAL_4K_VIDEO_CODEC,
   VERTICAL_4K_WIDTH,
 } from './pipeline/processJob.js';
 import {
@@ -678,18 +682,41 @@ test('extractBestStreams and yt-dlp/ffmpeg settings prioritize highest video & c
   assert.equal(VERTICAL_4K_WIDTH, 2160);
   assert.equal(VERTICAL_4K_HEIGHT, 3840);
   assert.equal(VERTICAL_4K_RESOLUTION, '2160x3840');
+  assert.equal(VERTICAL_4K_SCALE_FILTER, 'scale=2160:3840');
+  assert.equal(VERTICAL_4K_VIDEO_CODEC, 'libx264');
+  assert.equal(VERTICAL_4K_CRF, 18);
+  assert.equal(VERTICAL_4K_PRESET, 'slow');
   assert.equal(VERTICAL_4K_TARGET_BITRATE, '35000k');
   const encodeArgs = buildHighQualityEncodeArgs(
     VERTICAL_4K_TARGET_BITRATE,
-    VERTICAL_4K_RESOLUTION
+    VERTICAL_4K_RESOLUTION,
+    true,
+    {
+      videoCodec: VERTICAL_4K_VIDEO_CODEC,
+      crf: VERTICAL_4K_CRF,
+      preset: VERTICAL_4K_PRESET,
+    }
   );
-  assert.ok(encodeArgs.includes('-crf') && encodeArgs[encodeArgs.indexOf('-crf') + 1] === '14');
+  assert.ok(encodeArgs.includes('-c:v') && encodeArgs[encodeArgs.indexOf('-c:v') + 1] === 'libx264');
+  assert.ok(encodeArgs.includes('-preset') && encodeArgs[encodeArgs.indexOf('-preset') + 1] === 'slow');
+  assert.ok(encodeArgs.includes('-crf') && encodeArgs[encodeArgs.indexOf('-crf') + 1] === '18');
   assert.ok(encodeArgs.includes('-maxrate') && encodeArgs[encodeArgs.indexOf('-maxrate') + 1] === '60000k');
   assert.ok(encodeArgs.includes('-level:v') && encodeArgs[encodeArgs.indexOf('-level:v') + 1] === '5.2');
   assert.ok(encodeArgs.includes('-profile:v') && encodeArgs[encodeArgs.indexOf('-profile:v') + 1] === 'high');
   assert.ok(encodeArgs.includes('-metadata:s:v:0') && encodeArgs[encodeArgs.indexOf('-metadata:s:v:0') + 1] === 'rotate=0');
   assert.ok(encodeArgs.includes('-b:a') && encodeArgs[encodeArgs.indexOf('-b:a') + 1] === '320k');
   assert.ok(encodeArgs.includes('-ar') && encodeArgs[encodeArgs.indexOf('-ar') + 1] === '48000');
+
+  const hevcArgs = buildHighQualityEncodeArgs(
+    VERTICAL_4K_TARGET_BITRATE,
+    VERTICAL_4K_RESOLUTION,
+    true,
+    { videoCodec: 'libx265', crf: 18, preset: 'slow' }
+  );
+  assert.ok(hevcArgs.includes('-c:v') && hevcArgs[hevcArgs.indexOf('-c:v') + 1] === 'libx265');
+  assert.ok(hevcArgs.includes('-tag:v') && hevcArgs[hevcArgs.indexOf('-tag:v') + 1] === 'hvc1');
+  assert.ok(hevcArgs.includes('-preset') && hevcArgs[hevcArgs.indexOf('-preset') + 1] === 'slow');
+  assert.ok(hevcArgs.includes('-crf') && hevcArgs[hevcArgs.indexOf('-crf') + 1] === '18');
 
   // Verify fallback chain includes 4K adaptive -> 1080p MP4 adaptive -> 360p muxed fallback
   const chain = extractStreamCandidates({
