@@ -39,6 +39,7 @@ export class InMemoryJobStore implements JobStore {
       captions: input.captions,
       videoLayout: input.videoLayout ?? 'vertical-fill',
       audioMode: input.audioMode ?? 'original',
+      customAudioTrackId: input.customAudioTrackId,
       uploadedFilePath: input.uploadedFilePath,
       sourceTitle: input.sourceTitle,
       status: 'queued',

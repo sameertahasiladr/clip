@@ -8,14 +8,67 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 import { AppError, errorHandler } from './middleware/errorHandler.js';
 import { createJobRateLimiter } from './middleware/rateLimit.js';
-import { EXPORTS_BASE_DIR, UPLOADS_BASE_DIR } from './pipeline/processJob.js';
+import {
+  AUDIO_TRACKS_BASE_DIR,
+  EXPORTS_BASE_DIR,
+  UPLOADS_BASE_DIR,
+} from './pipeline/processJob.js';
 import type { ClipJobQueue } from './queue/jobQueue.js';
 import type { JobStore } from './queue/jobStore.js';
 import { createSocialRouter } from './routes/social.js';
+import { inspectYouTubeCopyright } from './services/youtubeFetch.js';
 import type { ClipLength } from './types.js';
-import { isValidJobId, sanitizeDownloadSlug, validateCreateJobRequest } from './validation.js';
+import {
+  isValidJobId,
+  parseCanonicalYouTubeUrl,
+  sanitizeDownloadSlug,
+  validateCreateJobRequest,
+} from './validation.js';
 
 const SAFE_CLIP_FILENAME_REGEX = /^clip-(?:[1-9]|1\d|20)\.(mp4|jpg)$/;
+
+/**
+ * Verifies uploaded audio magic bytes so only valid audio tracks (MP3, WAV, M4A, OGG, FLAC, WebM)
+ * can be stored for royalty-free audio replacement.
+ */
+export function detectUploadedAudioExtension(
+  buffer: Buffer
+): 'mp3' | 'wav' | 'm4a' | 'ogg' | 'flac' | 'webm' | null {
+  if (buffer.length < 12) return null;
+
+  // MP3 with ID3 tag or raw MPEG frame sync (0xFF 0xE0..0xFF)
+  if (
+    (buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33) ||
+    (buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0)
+  ) {
+    return 'mp3';
+  }
+  // WAV: RIFF....WAVE
+  if (
+    buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    buffer.subarray(8, 12).toString('ascii') === 'WAVE'
+  ) {
+    return 'wav';
+  }
+  // M4A/MP4 audio: ....ftyp
+  if (buffer.subarray(4, 8).toString('ascii') === 'ftyp') {
+    return 'm4a';
+  }
+  // OGG: OggS
+  if (buffer.subarray(0, 4).toString('ascii') === 'OggS') {
+    return 'ogg';
+  }
+  // FLAC: fLaC
+  if (buffer.subarray(0, 4).toString('ascii') === 'fLaC') {
+    return 'flac';
+  }
+  // WebM/Matroska: 1A 45 DF A3
+  if (buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) {
+    return 'webm';
+  }
+
+  return null;
+}
 
 export function createApiRouter(deps: { store: JobStore; queue: ClipJobQueue }): express.Router {
   const { store, queue } = deps;
@@ -26,6 +79,92 @@ export function createApiRouter(deps: { store: JobStore; queue: ClipJobQueue }):
   });
 
   router.use('/social', createSocialRouter({ jobStore: store }));
+
+  // Fast pre-clip YouTube copyright & license check (checks channel, CC-BY vs Standard license, and music notices)
+  router.post('/copyright-check', async (req, res, next) => {
+    try {
+      const rawUrl = typeof req.body?.url === 'string' ? req.body.url : '';
+      const parsed = parseCanonicalYouTubeUrl(rawUrl);
+      if (!parsed.valid || !parsed.videoId || !parsed.canonicalUrl) {
+        throw new AppError(parsed.error ?? 'Enter a valid YouTube video URL.', 400, 'INVALID_URL');
+      }
+
+      const info = await inspectYouTubeCopyright(parsed.videoId, parsed.canonicalUrl);
+      res.json({
+        ...info,
+        audioMode: 'original',
+      });
+    } catch (err) {
+      if (err instanceof AppError) {
+        next(err);
+        return;
+      }
+      next(
+        new AppError(
+          err instanceof Error ? err.message : 'Unable to check copyright details for this video.',
+          502,
+          'COPYRIGHT_CHECK_FAILED'
+        )
+      );
+    }
+  });
+
+  // Uploads a creator-owned royalty-free audio track (MP3/WAV/M4A/OGG/FLAC) for safe audio replacement
+  router.post(
+    '/audio-tracks',
+    express.raw({
+      type: ['audio/*', 'application/octet-stream'],
+      limit: '25mb',
+    }),
+    async (req, res, next) => {
+      try {
+        const buffer = req.body;
+        if (!Buffer.isBuffer(buffer) || buffer.length < 128) {
+          throw new AppError(
+            'Upload a valid royalty-free audio file (MP3, WAV, M4A, OGG, or FLAC up to 25 MB).',
+            400,
+            'INVALID_AUDIO_UPLOAD'
+          );
+        }
+
+        const ext = detectUploadedAudioExtension(buffer);
+        if (!ext) {
+          throw new AppError(
+            'Unsupported audio file format. Please upload an MP3, WAV, M4A, OGG, or FLAC file.',
+            400,
+            'UNSUPPORTED_AUDIO_FORMAT'
+          );
+        }
+
+        const rawName = typeof req.query.filename === 'string' ? req.query.filename : `track.${ext}`;
+        const cleanFilename = rawName.replace(/[^\w.\-\s]/g, '').trim().slice(0, 80) || `track.${ext}`;
+
+        const audioTrackId = crypto.randomUUID();
+        const targetPath = path.resolve(AUDIO_TRACKS_BASE_DIR, `${audioTrackId}.${ext}`);
+        if (!targetPath.startsWith(AUDIO_TRACKS_BASE_DIR + path.sep)) {
+          throw new AppError('Invalid audio track path.', 400, 'INVALID_AUDIO_PATH');
+        }
+
+        await fsp.mkdir(AUDIO_TRACKS_BASE_DIR, { recursive: true });
+        await fsp.writeFile(targetPath, buffer);
+
+        logger.info('Uploaded custom royalty-free audio track', {
+          audioTrackId,
+          ext,
+          sizeBytes: buffer.length,
+        });
+
+        res.status(201).json({
+          audioTrackId,
+          filename: cleanFilename,
+          format: ext,
+          sizeBytes: buffer.length,
+        });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
 
   router.post('/jobs', createJobRateLimiter, async (req, res, next) => {
     try {

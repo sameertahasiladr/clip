@@ -270,6 +270,7 @@ export async function renderVerticalClip(params: {
   captions: boolean;
   videoLayout?: VideoLayout;
   audioMode?: AudioMode;
+  customAudioPath?: string;
   videoFilter?: string;
   videoBitrate?: string;
   resolution?: ClipResolution;
@@ -284,6 +285,7 @@ export async function renderVerticalClip(params: {
     captions,
     videoLayout = 'vertical-fill',
     audioMode = 'original',
+    customAudioPath,
     videoFilter,
     resolution = '2160x3840',
     videoBitrate = resolution === '2160x3840' ? '20000k' : '8000k',
@@ -323,7 +325,7 @@ export async function renderVerticalClip(params: {
     }
   }
 
-  const filterComplex = buildVerticalFilterComplex({
+  const baseFilterComplex = buildVerticalFilterComplex({
     width,
     height,
     videoLayout,
@@ -336,28 +338,39 @@ export async function renderVerticalClip(params: {
     inputArgs.push('-user_agent', userAgent);
   }
 
+  const useCustomAudio = audioMode === 'custom-audio' && Boolean(customAudioPath);
   const includeAudio = audioMode !== 'mute';
 
-  await execFileAsync(
-    'ffmpeg',
-    [
-      ...inputArgs,
-      '-ss',
-      moment.start.toFixed(2),
-      '-t',
-      duration.toFixed(2),
-      '-i',
-      sourceInput,
-      '-filter_complex',
-      filterComplex,
-      '-map',
-      '[vout]',
-      ...(includeAudio ? ['-map', '0:a?'] : []),
-      ...buildHighQualityEncodeArgs(videoBitrate, resolution, includeAudio),
-      outputFilename,
-    ],
-    { cwd: resolvedBase, timeout: 10 * 60_000 }
-  );
+  const fadeOutStart = Math.max(0, Number((duration - 0.4).toFixed(2)));
+  const filterComplex = useCustomAudio
+    ? `${baseFilterComplex};[1:a]atrim=duration=${duration.toFixed(2)},asetpts=PTS-STARTPTS,afade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.4[aout]`
+    : baseFilterComplex;
+
+  const ffmpegArgs: string[] = [
+    ...inputArgs,
+    '-ss',
+    moment.start.toFixed(2),
+    '-t',
+    duration.toFixed(2),
+    '-i',
+    sourceInput,
+  ];
+
+  if (useCustomAudio && customAudioPath) {
+    ffmpegArgs.push('-stream_loop', '-1', '-i', customAudioPath);
+  }
+
+  ffmpegArgs.push('-filter_complex', filterComplex, '-map', '[vout]');
+
+  if (useCustomAudio) {
+    ffmpegArgs.push('-map', '[aout]', '-shortest');
+  } else if (includeAudio) {
+    ffmpegArgs.push('-map', '0:a?');
+  }
+
+  ffmpegArgs.push(...buildHighQualityEncodeArgs(videoBitrate, resolution, includeAudio), outputFilename);
+
+  await execFileAsync('ffmpeg', ffmpegArgs, { cwd: resolvedBase, timeout: 10 * 60_000 });
 
   await fs.access(outputPath);
 

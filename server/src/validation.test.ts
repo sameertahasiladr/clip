@@ -53,6 +53,7 @@ import {
   buildYouTubeOAuthUrl,
 } from './services/socialOAuth.js';
 import { formatYouTubeUploadMetadata } from './services/socialPublish.js';
+import { detectUploadedAudioExtension } from './app.js';
 
 test('parseTimedTextXml extracts format-3 and legacy YouTube captions cleanly', () => {
   const xml = `<?xml version="1.0" encoding="utf-8" ?><timedtext format="3"><body><p t="18640" d="3240">We&#39;re no strangers to love</p><p t="22640" d="4320">You know the rules &amp; so do I</p></body></timedtext>`;
@@ -847,6 +848,67 @@ test('detectSourceCopyrightSignals identifies Creative Commons, Standard License
   assert.equal(validatedMute.success, true);
   if (validatedMute.success) {
     assert.equal(validatedMute.data.audioMode, 'mute');
+  }
+});
+
+test('detectUploadedAudioExtension validates real audio magic bytes and rejects non-audio payloads', () => {
+  const mp3Id3 = Buffer.from([0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+  assert.equal(detectUploadedAudioExtension(mp3Id3), 'mp3');
+
+  const mp3Sync = Buffer.from([0xff, 0xfb, 0x90, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+  assert.equal(detectUploadedAudioExtension(mp3Sync), 'mp3');
+
+  const wav = Buffer.from('RIFF\x24\x00\x00\x00WAVEfmt ', 'latin1');
+  assert.equal(detectUploadedAudioExtension(wav), 'wav');
+
+  const m4a = Buffer.from('\x00\x00\x00\x18ftypM4A \x00\x00\x00\x00', 'latin1');
+  assert.equal(detectUploadedAudioExtension(m4a), 'm4a');
+
+  const ogg = Buffer.from('OggS\x00\x02\x00\x00\x00\x00\x00\x00', 'latin1');
+  assert.equal(detectUploadedAudioExtension(ogg), 'ogg');
+
+  const flac = Buffer.from('fLaC\x00\x00\x00\x22\x00\x00\x00\x00', 'latin1');
+  assert.equal(detectUploadedAudioExtension(flac), 'flac');
+
+  const webm = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0xf7, 0x81]);
+  assert.equal(detectUploadedAudioExtension(webm), 'webm');
+
+  assert.equal(detectUploadedAudioExtension(Buffer.from('<html>not audio</html>')), null);
+  assert.equal(detectUploadedAudioExtension(Buffer.from('tiny')), null);
+});
+
+test('validateCreateJobRequest requires a valid UUID customAudioTrackId when audioMode is custom-audio', () => {
+  const missingTrack = validateCreateJobRequest({
+    url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    clipLength: 30,
+    clipCount: 2,
+    captions: true,
+    audioMode: 'custom-audio',
+  });
+  assert.equal(missingTrack.success, false);
+
+  const invalidTrackId = validateCreateJobRequest({
+    url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    clipLength: 30,
+    clipCount: 2,
+    captions: true,
+    audioMode: 'custom-audio',
+    customAudioTrackId: '../evil-path',
+  });
+  assert.equal(invalidTrackId.success, false);
+
+  const validCustomAudio = validateCreateJobRequest({
+    url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    clipLength: 30,
+    clipCount: 2,
+    captions: true,
+    audioMode: 'custom-audio',
+    customAudioTrackId: '550e8400-e29b-41d4-a716-446655440000',
+  });
+  assert.equal(validCustomAudio.success, true);
+  if (validCustomAudio.success) {
+    assert.equal(validCustomAudio.data.audioMode, 'custom-audio');
+    assert.equal(validCustomAudio.data.customAudioTrackId, '550e8400-e29b-41d4-a716-446655440000');
   }
 });
 

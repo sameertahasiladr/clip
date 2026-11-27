@@ -2,7 +2,7 @@ export type ClipLength = 15 | 30;
 
 export type VideoLayout = 'vertical-fill' | 'vertical-blur';
 
-export type AudioMode = 'original' | 'mute';
+export type AudioMode = 'original' | 'mute' | 'custom-audio';
 
 export type YouTubeLicenseType = 'youtube' | 'creativeCommon';
 
@@ -34,6 +34,7 @@ export interface CreateJobInput {
   captions: boolean;
   videoLayout?: VideoLayout;
   audioMode?: AudioMode;
+  customAudioTrackId?: string;
   uploadedFilePath?: string;
   sourceTitle?: string;
 }
@@ -68,6 +69,7 @@ export interface JobRecord {
   captions: boolean;
   videoLayout: VideoLayout;
   audioMode: AudioMode;
+  customAudioTrackId?: string;
   sourceCopyright?: SourceCopyrightInfo;
   uploadedFilePath?: string;
   sourceTitle?: string;

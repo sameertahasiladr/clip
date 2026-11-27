@@ -421,7 +421,7 @@ export interface CopyrightEvaluationSource {
   sourceLicense: 'youtube' | 'creativeCommon' | 'unknown';
   category?: string;
   hasLicensedMusicSignals: boolean;
-  audioMode: 'original' | 'mute';
+  audioMode: 'original' | 'mute' | 'custom-audio';
 }
 
 export interface YouTubeCopyrightAssessment {
@@ -531,13 +531,17 @@ export function evaluateYouTubeCopyrightStatus(
     'Upload as Unlisted or Private first so YouTube Studio\'s Checks tab can scan for copyright claims before publishing.',
   ];
 
-  if (source.hasLicensedMusicSignals && source.audioMode !== 'mute') {
+  if (source.hasLicensedMusicSignals && source.audioMode === 'original') {
     recommendations.unshift(
-      'Music-rights signals were detected on the source video. To avoid music Content ID claims, regenerate with "Mute Audio (Shorts Library)" and add licensed Shorts music inside YouTube Studio.'
+      'Music-rights signals were detected on the source video. To avoid music Content ID claims, use "Mute Audio (Shorts Library)" or "Replace Audio (Royalty-Free)" with your own licensed track.'
     );
   } else if (source.audioMode === 'mute') {
     recommendations.unshift(
       'Audio was muted cleanly. After uploading, add a licensed track from the YouTube Shorts Audio Library in YouTube Studio.'
+    );
+  } else if (source.audioMode === 'custom-audio') {
+    recommendations.unshift(
+      'Source audio was replaced with your uploaded royalty-free audio track.'
     );
   }
 

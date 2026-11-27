@@ -27,8 +27,28 @@ const execFileAsync = promisify(execFile);
 
 export const EXPORTS_BASE_DIR = path.resolve(os.tmpdir(), 'clipgenie-exports');
 export const UPLOADS_BASE_DIR = path.resolve(os.tmpdir(), 'clipgenie-uploads');
+export const AUDIO_TRACKS_BASE_DIR = path.resolve(os.tmpdir(), 'clipgenie-audio');
 export const VERTICAL_4K_RESOLUTION = '2160x3840' as const;
 export const VERTICAL_4K_TARGET_BITRATE = '20000k';
+
+const ALLOWED_AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.ogg', '.flac', '.webm'] as const;
+
+export async function resolveCustomAudioTrackPath(trackId: string): Promise<string | null> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trackId)) {
+    return null;
+  }
+  for (const ext of ALLOWED_AUDIO_EXTS) {
+    const candidate = path.resolve(AUDIO_TRACKS_BASE_DIR, `${trackId}${ext}`);
+    if (!candidate.startsWith(AUDIO_TRACKS_BASE_DIR + path.sep)) continue;
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Try next supported extension
+    }
+  }
+  return null;
+}
 
 function hasCloudinaryConfig(): boolean {
   return Boolean(
@@ -373,6 +393,17 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
     const totalMoments = moments.length;
     const useCloudinary = hasCloudinaryConfig();
 
+    let customAudioPath: string | undefined;
+    if (job.audioMode === 'custom-audio' && job.customAudioTrackId) {
+      const resolved = await resolveCustomAudioTrackPath(job.customAudioTrackId);
+      if (!resolved) {
+        throw new Error(
+          'Uploaded royalty-free audio track was not found or expired. Please upload the audio track again.'
+        );
+      }
+      customAudioPath = resolved;
+    }
+
     for (let index = 0; index < totalMoments; index++) {
       const moment = moments[index];
       const relativeCues = buildRelativeCaptionCues(transcript, moment.start, moment.end);
@@ -387,6 +418,7 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
         captions: job.captions,
         videoLayout: job.videoLayout,
         audioMode: job.audioMode ?? 'original',
+        customAudioPath,
         videoBitrate: VERTICAL_4K_TARGET_BITRATE,
         resolution: VERTICAL_4K_RESOLUTION,
       });

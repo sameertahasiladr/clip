@@ -82,7 +82,8 @@ export const createJobBodySchema = z.object({
   clipCount: z.number().int().min(1).max(MAX_CLIP_COUNT).default(3),
   captions: z.boolean().default(true),
   videoLayout: z.enum(['vertical-fill', 'vertical-blur']).default('vertical-fill'),
-  audioMode: z.enum(['original', 'mute']).default('original'),
+  audioMode: z.enum(['original', 'mute', 'custom-audio']).default('original'),
+  customAudioTrackId: z.string().refine((v) => UUID_REGEX.test(v), 'Invalid audio track ID').optional(),
 });
 
 export function validateCreateJobRequest(body: unknown): {
@@ -99,6 +100,13 @@ export function validateCreateJobRequest(body: unknown): {
     return {
       success: false,
       error: firstIssue ? `${firstIssue.path.join('.') || 'body'}: ${firstIssue.message}` : 'Invalid request payload.',
+    };
+  }
+
+  if (parsed.data.audioMode === 'custom-audio' && !parsed.data.customAudioTrackId) {
+    return {
+      success: false,
+      error: 'Upload a royalty-free audio track before selecting Replace Audio mode.',
     };
   }
 
@@ -120,6 +128,7 @@ export function validateCreateJobRequest(body: unknown): {
       captions: parsed.data.captions,
       videoLayout: parsed.data.videoLayout,
       audioMode: parsed.data.audioMode,
+      customAudioTrackId: parsed.data.customAudioTrackId,
     },
   };
 }
