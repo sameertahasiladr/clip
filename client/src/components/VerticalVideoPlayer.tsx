@@ -33,9 +33,14 @@ export function VerticalVideoPlayer({ clip }: VerticalVideoPlayerProps) {
   useEffect(() => {
     setIsPlaying(false);
     setCurrentTime(0);
+    setMediaDuration(clip.duration || 15);
     setVideoError(false);
     setEmbedActive(false);
-  }, [clip.id, clip.videoUrl]);
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.load();
+    }
+  }, [clip.id, clip.videoUrl, clip.duration]);
 
   const togglePlay = async () => {
     if (isEmbedMode) {

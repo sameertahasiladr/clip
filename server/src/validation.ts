@@ -137,6 +137,87 @@ export function isValidJobId(jobId: string): boolean {
   return UUID_REGEX.test(jobId);
 }
 
+export const MIN_REGENERATE_CLIP_SECONDS = 3;
+export const MAX_REGENERATE_CLIP_SECONDS = 180;
+
+export function parseClipIndexParam(raw: string): number | null {
+  if (!/^(?:[1-9]|1\d|20)$/.test(raw)) {
+    return null;
+  }
+  return Number.parseInt(raw, 10);
+}
+
+const regenerateClipBodySchema = z.object({
+  startTime: z.number().finite().min(0, 'Start time must be 0 or greater.'),
+  endTime: z.number().finite().positive('End time must be greater than 0.'),
+});
+
+export function validateRegenerateClipRequest(
+  body: unknown,
+  maxSourceDuration?: number
+):
+  | {
+      success: true;
+      data: { startTime: number; endTime: number };
+    }
+  | {
+      success: false;
+      error: string;
+    } {
+  const parsed = regenerateClipBodySchema.safeParse(body);
+  if (!parsed.success) {
+    const firstIssue = parsed.error.issues[0];
+    return {
+      success: false,
+      error: firstIssue
+        ? `${firstIssue.path.join('.') || 'timestamps'}: ${firstIssue.message}`
+        : 'Enter valid numeric start and end timestamps.',
+    };
+  }
+
+  const startTime = Number(parsed.data.startTime.toFixed(2));
+  const endTime = Number(parsed.data.endTime.toFixed(2));
+
+  if (endTime <= startTime) {
+    return {
+      success: false,
+      error: 'End time must be after start time.',
+    };
+  }
+
+  const duration = Number((endTime - startTime).toFixed(2));
+  if (duration < MIN_REGENERATE_CLIP_SECONDS) {
+    return {
+      success: false,
+      error: `Clip duration must be at least ${MIN_REGENERATE_CLIP_SECONDS} seconds.`,
+    };
+  }
+
+  if (duration > MAX_REGENERATE_CLIP_SECONDS) {
+    return {
+      success: false,
+      error: `Clip duration cannot exceed ${MAX_REGENERATE_CLIP_SECONDS} seconds.`,
+    };
+  }
+
+  if (
+    typeof maxSourceDuration === 'number' &&
+    Number.isFinite(maxSourceDuration) &&
+    maxSourceDuration > 0 &&
+    endTime > maxSourceDuration + 0.5
+  ) {
+    return {
+      success: false,
+      error: `End time cannot exceed the source video duration (${Math.floor(maxSourceDuration)}s).`,
+    };
+  }
+
+  return {
+    success: true,
+    data: { startTime, endTime },
+  };
+}
+
 const momentItemSchema = z.object({
   start: z.number().finite().min(0),
   end: z.number().finite().positive(),

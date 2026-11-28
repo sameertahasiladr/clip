@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -5,6 +6,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
+import { AppError } from '../middleware/errorHandler.js';
 import type { JobStore } from '../queue/jobStore.js';
 import { uploadClipToCloudinary } from '../services/cloudinary.js';
 import { renderVerticalClip } from '../services/ffmpeg.js';
@@ -122,11 +124,49 @@ function buildRelativeCaptionCues(
     .filter((cue) => cue.end > cue.start && cue.text.length > 0);
 }
 
+const ALLOWED_SOURCE_VIDEO_EXTS = new Set(['.mp4', '.mkv', '.webm', '.mov']);
+
+function isPathInsideBase(targetPath: string, baseDir: string): boolean {
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedTarget = path.resolve(targetPath);
+  return resolvedTarget.startsWith(resolvedBase + path.sep);
+}
+
+async function persistJobSourceVideo(
+  jobId: string,
+  downloadedVideoPath: string
+): Promise<string | undefined> {
+  const jobExportDir = path.resolve(EXPORTS_BASE_DIR, jobId);
+  if (!isPathInsideBase(jobExportDir, EXPORTS_BASE_DIR)) {
+    return undefined;
+  }
+
+  const rawExt = path.extname(downloadedVideoPath).toLowerCase();
+  const safeExt = ALLOWED_SOURCE_VIDEO_EXTS.has(rawExt) ? rawExt : '.mp4';
+  const targetSourcePath = path.resolve(jobExportDir, `source${safeExt}`);
+  if (!isPathInsideBase(targetSourcePath, jobExportDir)) {
+    return undefined;
+  }
+
+  try {
+    await fs.mkdir(jobExportDir, { recursive: true });
+    await fs.copyFile(downloadedVideoPath, targetSourcePath);
+    return targetSourcePath;
+  } catch (err) {
+    logger.warn('Could not cache source video for fast clip regeneration', {
+      jobId,
+      reason: err instanceof Error ? err.message : 'unknown',
+    });
+    return undefined;
+  }
+}
+
 async function persistLocalClipExport(
   jobId: string,
   clipIndex: number,
   videoPath: string,
-  posterPath: string | null
+  posterPath: string | null,
+  cacheVersion?: number
 ): Promise<{ videoUrl: string; posterUrl?: string }> {
   const jobExportDir = path.resolve(EXPORTS_BASE_DIR, jobId);
   if (!jobExportDir.startsWith(EXPORTS_BASE_DIR + path.sep)) {
@@ -142,18 +182,20 @@ async function persistLocalClipExport(
   }
   await fs.copyFile(videoPath, targetMp4);
 
+  const versionSuffix = cacheVersion ? `?v=${cacheVersion}` : '';
+
   let posterUrl: string | undefined;
   if (posterPath) {
     const jpgFilename = `clip-${clipIndex + 1}.jpg`;
     const targetJpg = path.resolve(jobExportDir, jpgFilename);
     if (targetJpg.startsWith(jobExportDir + path.sep)) {
       await fs.copyFile(posterPath, targetJpg);
-      posterUrl = `/api/jobs/${jobId}/clips/${jpgFilename}`;
+      posterUrl = `/api/jobs/${jobId}/clips/${jpgFilename}${versionSuffix}`;
     }
   }
 
   return {
-    videoUrl: `/api/jobs/${jobId}/clips/${mp4Filename}`,
+    videoUrl: `/api/jobs/${jobId}/clips/${mp4Filename}${versionSuffix}`,
     posterUrl,
   };
 }
@@ -631,11 +673,20 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
       });
     }
 
+    const cachedSourcePath = job.uploadedFilePath
+      ? downloadedVideoPath
+      : await persistJobSourceVideo(jobId, downloadedVideoPath);
+
     await store.updateProgress(jobId, {
       status: 'done',
       step: 'Done',
       progress: 100,
       clips,
+      sourceFilePath: cachedSourcePath,
+      sourceDuration: videoDuration,
+      sourceWidth: sourceWidth || undefined,
+      sourceHeight: sourceHeight || undefined,
+      transcript,
     });
 
     logger.info('Completed server-side YouTube clip job', {
@@ -671,6 +722,322 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
         jobId,
         error: cleanupErr instanceof Error ? cleanupErr.message : 'unknown',
       });
+    }
+  }
+}
+
+async function resolveExistingSourcePath(job: JobRecord): Promise<string | null> {
+  const candidates = [
+    { path: job.sourceFilePath, bases: [EXPORTS_BASE_DIR, UPLOADS_BASE_DIR] },
+    { path: job.uploadedFilePath, bases: [UPLOADS_BASE_DIR] },
+  ];
+
+  for (const item of candidates) {
+    if (!item.path) continue;
+    const resolved = path.resolve(item.path);
+    const confined = item.bases.some((base) => isPathInsideBase(resolved, base));
+    if (!confined) continue;
+    try {
+      await fs.access(resolved);
+      return resolved;
+    } catch {
+      // Cached source file no longer exists on disk
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Regenerates a single clip within a completed job using user-adjusted start/end timestamps.
+ * Reuses the job's cached source video and transcript when available, falling back to a fresh
+ * YouTube download only if the cached file was removed by OS temp cleanup.
+ */
+export async function regenerateSingleClip(params: {
+  jobId: string;
+  clipIndex: number; // 1-based index (1..20)
+  startTime: number;
+  endTime: number;
+  store: JobStore;
+}): Promise<{ clip: ClipResult; sourceDuration?: number }> {
+  const { jobId, clipIndex, startTime, endTime, store } = params;
+
+  const job = await store.get(jobId);
+  if (!job) {
+    throw new AppError('Job not found.', 404, 'JOB_NOT_FOUND');
+  }
+
+  if (job.status !== 'done') {
+    throw new AppError(
+      'Wait until clip generation finishes before editing clip timestamps.',
+      409,
+      'JOB_NOT_READY'
+    );
+  }
+
+  const arrayIndex = clipIndex - 1;
+  const existingClip = job.clips[arrayIndex];
+  if (!existingClip) {
+    throw new AppError(`Clip ${clipIndex} was not found for this job.`, 404, 'CLIP_NOT_FOUND');
+  }
+
+  if (
+    typeof job.sourceDuration === 'number' &&
+    job.sourceDuration > 0 &&
+    endTime > job.sourceDuration + 0.5
+  ) {
+    throw new AppError(
+      `End time cannot exceed the source video duration (${Math.floor(job.sourceDuration)}s).`,
+      400,
+      'INVALID_TIMESTAMPS'
+    );
+  }
+
+  const regenBaseRoot = path.resolve(os.tmpdir(), 'clipgenie-regen');
+  const regenDir = path.resolve(regenBaseRoot, `${jobId}-${clipIndex}-${crypto.randomUUID()}`);
+  if (!isPathInsideBase(regenDir, regenBaseRoot)) {
+    throw new AppError('Unsafe clip regeneration directory.', 400, 'INVALID_PATH');
+  }
+
+  await fs.mkdir(regenDir, { recursive: true });
+
+  try {
+    let sourcePath = await resolveExistingSourcePath(job);
+    let sourceDuration = job.sourceDuration ?? 0;
+    let sourceWidth = job.sourceWidth ?? existingClip.sourceWidth ?? 0;
+    let sourceHeight = job.sourceHeight ?? existingClip.sourceHeight ?? 0;
+
+    if (!sourcePath) {
+      if (job.uploadedFilePath) {
+        throw new AppError(
+          'The original uploaded source video is no longer available on the server. Upload the video again to re-cut clips.',
+          410,
+          'SOURCE_EXPIRED'
+        );
+      }
+
+      const parsedUrl = parseCanonicalYouTubeUrl(job.url);
+      if (!parsedUrl.valid || !parsedUrl.videoId || !parsedUrl.canonicalUrl) {
+        throw new AppError('Original YouTube source URL is invalid.', 400, 'INVALID_URL');
+      }
+
+      const videoInfo = await fetchYouTubeVideoInfo(parsedUrl.videoId, parsedUrl.canonicalUrl);
+      sourceDuration = videoInfo.duration || sourceDuration;
+      const ytdlpInstalled = await isYtDlpAvailable();
+
+      if (ytdlpInstalled) {
+        try {
+          sourcePath = await downloadVideo(parsedUrl.canonicalUrl, regenDir, {
+            allowLowResFallback: !videoInfo.streamCandidates.some((c) => c.height >= 1080),
+          });
+        } catch (err) {
+          logger.warn('yt-dlp re-download failed during clip regeneration; trying direct stream', {
+            jobId,
+            clipIndex,
+            reason: err instanceof Error ? err.message : 'unknown',
+          });
+        }
+      }
+
+      if (!sourcePath && videoInfo.streamCandidates.length > 0) {
+        for (const candidate of videoInfo.streamCandidates) {
+          try {
+            sourcePath = await downloadYouTubeStreamsToFile({
+              videoStreamUrl: candidate.videoUrl,
+              audioStreamUrl: candidate.audioUrl,
+              isHls: candidate.isHls,
+              userAgent: candidate.userAgent,
+              cookieHeader: candidate.useCookies ? videoInfo.cookieHeader : undefined,
+              jobDir: regenDir,
+            });
+            break;
+          } catch {
+            // Try next quality candidate
+          }
+        }
+      }
+
+      if (!sourcePath) {
+        throw new AppError(
+          'Could not reload the source video to regenerate this clip. Please try again.',
+          502,
+          'SOURCE_DOWNLOAD_FAILED'
+        );
+      }
+
+      const cachedAgain = await persistJobSourceVideo(jobId, sourcePath);
+      if (cachedAgain) {
+        await store.updateProgress(jobId, { sourceFilePath: cachedAgain });
+      }
+    }
+
+    if (!sourceDuration || !sourceWidth || !sourceHeight) {
+      const probed = await probeLocalVideoInfo(sourcePath);
+      sourceDuration = probed.duration;
+      sourceWidth = probed.width || sourceWidth;
+      sourceHeight = probed.height || sourceHeight;
+    }
+
+    if (sourceDuration > 0 && endTime > sourceDuration + 0.5) {
+      throw new AppError(
+        `End time cannot exceed the source video duration (${Math.floor(sourceDuration)}s).`,
+        400,
+        'INVALID_TIMESTAMPS'
+      );
+    }
+
+    const safeStart = Number(Math.max(0, startTime).toFixed(2));
+    const safeEnd = Number(
+      (sourceDuration > 0 ? Math.min(sourceDuration, endTime) : endTime).toFixed(2)
+    );
+    if (safeEnd - safeStart < 3) {
+      throw new AppError('Clip duration must be at least 3 seconds.', 400, 'INVALID_TIMESTAMPS');
+    }
+
+    let customAudioPath: string | undefined;
+    if (job.audioMode === 'custom-audio' && job.customAudioTrackId) {
+      const resolved = await resolveCustomAudioTrackPath(job.customAudioTrackId);
+      if (!resolved) {
+        throw new AppError(
+          'Uploaded royalty-free audio track expired. Please create a new job with your audio file.',
+          410,
+          'AUDIO_TRACK_EXPIRED'
+        );
+      }
+      customAudioPath = resolved;
+    }
+
+    const transcript = job.transcript ?? [];
+    const relativeCues = buildRelativeCaptionCues(transcript, safeStart, safeEnd);
+    const duration = Math.max(1, Math.round(safeEnd - safeStart));
+
+    logger.info('Regenerating single 4K vertical clip with custom timestamps', {
+      jobId,
+      clipIndex,
+      startTime: safeStart,
+      endTime: safeEnd,
+      duration,
+    });
+
+    const artifacts = await renderVerticalClip({
+      sourceInput: sourcePath,
+      jobDir: regenDir,
+      clipIndex: arrayIndex,
+      moment: {
+        start: safeStart,
+        end: safeEnd,
+        title: existingClip.title,
+        caption: existingClip.caption,
+        score: existingClip.score,
+      },
+      transcript,
+      captions: job.captions,
+      videoLayout: job.videoLayout,
+      audioMode: job.audioMode ?? 'original',
+      customAudioPath,
+      scaleFilter: VERTICAL_4K_SCALE_FILTER,
+      videoCodec: VERTICAL_4K_VIDEO_CODEC,
+      crf: VERTICAL_4K_CRF,
+      preset: VERTICAL_4K_PRESET,
+      videoBitrate: VERTICAL_4K_TARGET_BITRATE,
+      resolution: VERTICAL_4K_RESOLUTION,
+    });
+
+    const renderedProbe = await probeLocalVideoInfo(artifacts.videoPath).catch(() => null);
+    const outputWidth = renderedProbe?.width || VERTICAL_4K_WIDTH;
+    const outputHeight = renderedProbe?.height || VERTICAL_4K_HEIGHT;
+    const outputBitrateKbps = renderedProbe?.bitrateKbps || undefined;
+
+    const cacheVersion = Date.now();
+    let clipVideoUrl: string;
+    let clipPosterUrl: string | undefined = existingClip.posterUrl;
+
+    if (hasCloudinaryConfig()) {
+      try {
+        clipVideoUrl = await uploadClipToCloudinary(artifacts.videoPath, jobId, arrayIndex);
+        if (artifacts.posterPath) {
+          const localExport = await persistLocalClipExport(
+            jobId,
+            arrayIndex,
+            artifacts.videoPath,
+            artifacts.posterPath,
+            cacheVersion
+          );
+          clipPosterUrl = localExport.posterUrl ?? existingClip.posterUrl;
+        }
+      } catch (cloudErr) {
+        logger.warn('Cloudinary 4K upload failed during clip regeneration; serving locally', {
+          jobId,
+          clipIndex,
+          reason: cloudErr instanceof Error ? cloudErr.message : 'unknown',
+        });
+        const exported = await persistLocalClipExport(
+          jobId,
+          arrayIndex,
+          artifacts.videoPath,
+          artifacts.posterPath,
+          cacheVersion
+        );
+        clipVideoUrl = exported.videoUrl;
+        clipPosterUrl = exported.posterUrl ?? existingClip.posterUrl;
+      }
+    } else {
+      const exported = await persistLocalClipExport(
+        jobId,
+        arrayIndex,
+        artifacts.videoPath,
+        artifacts.posterPath,
+        cacheVersion
+      );
+      clipVideoUrl = exported.videoUrl;
+      clipPosterUrl = exported.posterUrl ?? existingClip.posterUrl;
+    }
+
+    const updatedClip: ClipResult = {
+      ...existingClip,
+      videoUrl: clipVideoUrl,
+      posterUrl: clipPosterUrl,
+      duration,
+      startTime: safeStart,
+      endTime: safeEnd,
+      captionCues: relativeCues,
+      width: outputWidth,
+      height: outputHeight,
+      bitrateKbps: outputBitrateKbps,
+      sourceWidth: sourceWidth || existingClip.sourceWidth,
+      sourceHeight: sourceHeight || existingClip.sourceHeight,
+    };
+
+    const latestJob = await store.get(jobId);
+    const updatedClips = [...(latestJob?.clips ?? job.clips)];
+    updatedClips[arrayIndex] = updatedClip;
+
+    await store.updateProgress(jobId, {
+      clips: updatedClips,
+      sourceDuration: sourceDuration || undefined,
+      sourceWidth: sourceWidth || undefined,
+      sourceHeight: sourceHeight || undefined,
+    });
+
+    logger.info('Completed single 4K clip regeneration', {
+      jobId,
+      clipIndex,
+      startTime: safeStart,
+      endTime: safeEnd,
+      outputWidth,
+      outputHeight,
+      outputBitrateKbps,
+    });
+
+    return {
+      clip: updatedClip,
+      sourceDuration: sourceDuration || undefined,
+    };
+  } finally {
+    try {
+      await fs.rm(regenDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup failures
     }
   }
 }

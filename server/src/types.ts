@@ -78,6 +78,11 @@ export interface JobRecord {
   sourceCopyright?: SourceCopyrightInfo;
   uploadedFilePath?: string;
   sourceTitle?: string;
+  sourceFilePath?: string;
+  sourceDuration?: number;
+  sourceWidth?: number;
+  sourceHeight?: number;
+  transcript?: TranscriptSegment[];
   status: JobStatus;
   step: JobStep;
   progress: number;

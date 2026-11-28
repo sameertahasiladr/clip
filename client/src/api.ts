@@ -8,6 +8,8 @@ import type {
   OAuthProvider,
   PublishClipPayload,
   PublishClipResponse,
+  RegenerateClipPayload,
+  RegenerateClipResponse,
   SocialAccountsState,
   SocialPlatform,
   SourceCopyrightInfo,
@@ -212,6 +214,7 @@ async function getMockJobStatus(jobId: string): Promise<JobResponse> {
       status: 'done',
       step: 'Done',
       progress: 100,
+      sourceDuration: 1500,
       clips: buildMockClips(
         record.id,
         record.payload.clipLength,
@@ -359,8 +362,65 @@ export async function getJobStatus(jobId: string): Promise<JobResponse> {
     step: data.step ?? 'Fetching video',
     progress: typeof data.progress === 'number' ? data.progress : 0,
     clips: Array.isArray(data.clips) ? data.clips : [],
+    sourceDuration: typeof data.sourceDuration === 'number' ? data.sourceDuration : undefined,
     sourceCopyright: data.sourceCopyright,
     error: data.error,
+  };
+}
+
+export async function regenerateClip(
+  jobId: string,
+  clipIndex: number,
+  payload: RegenerateClipPayload
+): Promise<RegenerateClipResponse> {
+  if (isMockMode()) {
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    const template = SAMPLE_CLIPS_CATALOG[(clipIndex - 1) % SAMPLE_CLIPS_CATALOG.length];
+    const duration = Math.max(3, Math.round(payload.endTime - payload.startTime));
+    return {
+      sourceDuration: 1500,
+      clip: {
+        ...template,
+        id: `${jobId}-clip-${clipIndex}`,
+        videoUrl: `${template.videoUrl}?v=${Date.now()}`,
+        duration,
+        startTime: payload.startTime,
+        endTime: payload.endTime,
+        captionsEnabled: true,
+        width: 2160,
+        height: 3840,
+      },
+    };
+  }
+
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${encodeURIComponent(jobId)}/clips/${clipIndex}/regenerate`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(payload),
+    }
+  );
+
+  const data = (await response.json().catch(() => ({}))) as Partial<RegenerateClipResponse> & {
+    error?: string;
+    code?: string;
+  };
+
+  if (!response.ok || !data.clip) {
+    throw new ApiError(
+      data.error ?? `Unable to regenerate clip (HTTP ${response.status}).`,
+      response.status,
+      data.code
+    );
+  }
+
+  return {
+    clip: data.clip,
+    sourceDuration: typeof data.sourceDuration === 'number' ? data.sourceDuration : undefined,
   };
 }
 

@@ -12,6 +12,7 @@ import {
   AUDIO_TRACKS_BASE_DIR,
   EXPORTS_BASE_DIR,
   UPLOADS_BASE_DIR,
+  regenerateSingleClip,
 } from './pipeline/processJob.js';
 import type { ClipJobQueue } from './queue/jobQueue.js';
 import type { JobStore } from './queue/jobStore.js';
@@ -21,8 +22,10 @@ import type { ClipLength } from './types.js';
 import {
   isValidJobId,
   parseCanonicalYouTubeUrl,
+  parseClipIndexParam,
   sanitizeDownloadSlug,
   validateCreateJobRequest,
+  validateRegenerateClipRequest,
 } from './validation.js';
 
 const SAFE_CLIP_FILENAME_REGEX = /^clip-(?:[1-9]|1\d|20)\.(mp4|jpg)$/;
@@ -281,6 +284,9 @@ export function createApiRouter(deps: { store: JobStore; queue: ClipJobQueue }):
         step: record.step,
         progress: record.progress,
         clips: record.clips,
+        ...(typeof record.sourceDuration === 'number' && record.sourceDuration > 0
+          ? { sourceDuration: record.sourceDuration }
+          : {}),
         ...(record.sourceCopyright ? { sourceCopyright: record.sourceCopyright } : {}),
         ...(record.error ? { error: record.error } : {}),
       });
@@ -288,6 +294,47 @@ export function createApiRouter(deps: { store: JobStore; queue: ClipJobQueue }):
       next(err);
     }
   });
+
+  // Regenerates a single clip with custom user-adjusted start/end timestamps
+  router.post(
+    '/jobs/:id/clips/:clipIndex/regenerate',
+    createJobRateLimiter,
+    async (req, res, next) => {
+      try {
+        const jobId = req.params.id;
+        if (!isValidJobId(jobId)) {
+          throw new AppError('Invalid job ID format.', 400, 'INVALID_JOB_ID');
+        }
+
+        const clipIndex = parseClipIndexParam(req.params.clipIndex);
+        if (!clipIndex) {
+          throw new AppError('Invalid clip index.', 400, 'INVALID_CLIP_INDEX');
+        }
+
+        const existingJob = await store.get(jobId);
+        if (!existingJob) {
+          throw new AppError('Job not found.', 404, 'JOB_NOT_FOUND');
+        }
+
+        const validated = validateRegenerateClipRequest(req.body, existingJob.sourceDuration);
+        if (!validated.success) {
+          throw new AppError(validated.error, 400, 'INVALID_TIMESTAMPS');
+        }
+
+        const result = await regenerateSingleClip({
+          jobId,
+          clipIndex,
+          startTime: validated.data.startTime,
+          endTime: validated.data.endTime,
+          store,
+        });
+
+        res.json(result);
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
 
   // Serves locally rendered 9:16 MP4 clips & poster frames with strict path confinement,
   // HTTP Range streaming, and synchronous attachment downloads

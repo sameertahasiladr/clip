@@ -93,6 +93,62 @@ export function formatDuration(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+/**
+ * Formats seconds as MM:SS (or H:MM:SS when >= 1 hour) for timestamp inputs and timeline labels.
+ */
+export function formatTimestamp(seconds: number): string {
+  const safe = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(safe / 3600);
+  const mins = Math.floor((safe % 3600) / 60);
+  const secs = safe % 60;
+  if (hours > 0) {
+    return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Parses flexible user timestamp inputs ("90", "1:30", "01:30", "1:02:05", or "12.5")
+ * into non-negative seconds, or returns null for malformed values.
+ */
+export function parseTimestampInput(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    const val = Number.parseFloat(trimmed);
+    return Number.isFinite(val) && val >= 0 ? Number(val.toFixed(2)) : null;
+  }
+
+  const parts = trimmed.split(':');
+  if (parts.length !== 2 && parts.length !== 3) {
+    return null;
+  }
+
+  if (parts.length === 2) {
+    if (!/^\d+$/.test(parts[0]) || !/^\d{1,2}(?:\.\d+)?$/.test(parts[1])) {
+      return null;
+    }
+    const mins = Number.parseInt(parts[0], 10);
+    const secs = Number.parseFloat(parts[1]);
+    if (!Number.isFinite(secs) || secs < 0 || secs >= 60) return null;
+    return Number((mins * 60 + secs).toFixed(2));
+  }
+
+  if (
+    !/^\d+$/.test(parts[0]) ||
+    !/^\d{1,2}$/.test(parts[1]) ||
+    !/^\d{1,2}(?:\.\d+)?$/.test(parts[2])
+  ) {
+    return null;
+  }
+  const hours = Number.parseInt(parts[0], 10);
+  const mins = Number.parseInt(parts[1], 10);
+  const secs = Number.parseFloat(parts[2]);
+  if (mins >= 60 || !Number.isFinite(secs) || secs < 0 || secs >= 60) return null;
+  return Number((hours * 3600 + mins * 60 + secs).toFixed(2));
+}
+
 export function getViralityLabel(score: number): {
   label: string;
   toneClass: string;

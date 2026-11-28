@@ -72,6 +72,7 @@ export default function App() {
   const [currentStep, setCurrentStep] = useState<JobStep>('Fetching video');
   const [progress, setProgress] = useState(0);
   const [clips, setClips] = useState<ClipItem[]>([]);
+  const [sourceDuration, setSourceDuration] = useState<number | undefined>(undefined);
   const [sourceCopyright, setSourceCopyright] = useState<SourceCopyrightInfo | null>(null);
   const [jobError, setJobError] = useState<string | null>(null);
 
@@ -215,6 +216,9 @@ export default function App() {
         if (result.sourceCopyright) {
           setSourceCopyright(result.sourceCopyright);
         }
+        if (typeof result.sourceDuration === 'number' && result.sourceDuration > 0) {
+          setSourceDuration(result.sourceDuration);
+        }
 
         if (result.status === 'done') {
           stopPolling();
@@ -320,10 +324,24 @@ export default function App() {
     setCurrentStep('Fetching video');
     setJobError(null);
     setClips([]);
+    setSourceDuration(undefined);
     setSourceCopyright(null);
     setPreCheckCopyright(null);
     setPreCheckError(null);
     setValidationError(null);
+  };
+
+  const handleClipUpdated = (
+    clipIndex: number,
+    updatedClip: ClipItem,
+    nextSourceDuration?: number
+  ) => {
+    setClips((prev) =>
+      prev.map((item, idx) => (idx === clipIndex ? updatedClip : item))
+    );
+    if (typeof nextSourceDuration === 'number' && nextSourceDuration > 0) {
+      setSourceDuration(nextSourceDuration);
+    }
   };
 
   const handleFillDemoUrl = () => {
@@ -371,6 +389,7 @@ export default function App() {
       setCurrentStep('Fetching video');
       setProgress(10);
       setClips([]);
+      setSourceDuration(undefined);
       setSourceCopyright(null);
       setViewState('processing');
     } catch (err) {
@@ -453,6 +472,7 @@ export default function App() {
             clips={clips}
             jobId={activeJobId}
             sourceUrl={submittedUrl}
+            sourceDuration={sourceDuration}
             sourceCopyright={sourceCopyright}
             socialAccounts={socialAccounts}
             youtubePrivacy={youtubePrivacy}
@@ -462,6 +482,7 @@ export default function App() {
               setIsAccountsModalOpen(true);
               void loadSocialAccounts();
             }}
+            onClipUpdated={handleClipUpdated}
           />
         )}
 

@@ -88,8 +88,19 @@ export interface JobResponse {
   step: JobStep;
   progress: number;
   clips: ClipItem[];
+  sourceDuration?: number;
   sourceCopyright?: SourceCopyrightInfo;
   error?: string;
+}
+
+export interface RegenerateClipPayload {
+  startTime: number;
+  endTime: number;
+}
+
+export interface RegenerateClipResponse {
+  clip: ClipItem;
+  sourceDuration?: number;
 }
 
 export type SocialPlatform = 'youtube' | 'instagram' | 'facebook';

@@ -19,22 +19,26 @@ interface ResultsGridProps {
   clips: ClipItem[];
   jobId: string | null;
   sourceUrl: string;
+  sourceDuration?: number;
   sourceCopyright: SourceCopyrightInfo | null;
   socialAccounts: SocialAccountsState | null;
   youtubePrivacy: YouTubePrivacyStatus;
   onReset: () => void;
   onOpenAccounts: () => void;
+  onClipUpdated: (clipIndex: number, updatedClip: ClipItem, sourceDuration?: number) => void;
 }
 
 export function ResultsGrid({
   clips,
   jobId,
   sourceUrl,
+  sourceDuration,
   sourceCopyright,
   socialAccounts,
   youtubePrivacy,
   onReset,
   onOpenAccounts,
+  onClipUpdated,
 }: ResultsGridProps) {
   const copyrightAssessment = sourceCopyright
     ? evaluateYouTubeCopyrightStatus(sourceCopyright, socialAccounts?.youtube?.channelId)
@@ -191,10 +195,12 @@ export function ResultsGrid({
               clip={clip}
               index={index}
               jobId={jobId}
+              sourceDuration={sourceDuration}
               sourceCopyright={sourceCopyright}
               socialAccounts={socialAccounts}
               youtubePrivacy={youtubePrivacy}
               onOpenAccounts={onOpenAccounts}
+              onClipUpdated={onClipUpdated}
             />
           ))}
         </div>

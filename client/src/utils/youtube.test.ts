@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   formatDuration,
+  formatTimestamp,
   getViralityLabel,
+  parseTimestampInput,
   sanitizeFilename,
   validateYouTubeUrl,
 } from './youtube';
@@ -220,6 +222,24 @@ test('evaluateYouTubeCopyrightStatus and appendAttributionSafely classify owners
     'UC_OWN_123'
   );
   assert.ok(mutedAssessment.recommendations[0].includes('Audio was muted cleanly'));
+});
+
+test('formatTimestamp and parseTimestampInput handle MM:SS, H:MM:SS, seconds, and invalid values', () => {
+  assert.equal(formatTimestamp(0), '0:00');
+  assert.equal(formatTimestamp(75), '1:15');
+  assert.equal(formatTimestamp(3665), '1:01:05');
+
+  assert.equal(parseTimestampInput('45'), 45);
+  assert.equal(parseTimestampInput('12.5'), 12.5);
+  assert.equal(parseTimestampInput('1:30'), 90);
+  assert.equal(parseTimestampInput('02:05.5'), 125.5);
+  assert.equal(parseTimestampInput('1:02:05'), 3725);
+
+  assert.equal(parseTimestampInput(''), null);
+  assert.equal(parseTimestampInput('-5'), null);
+  assert.equal(parseTimestampInput('1:65'), null);
+  assert.equal(parseTimestampInput('abc'), null);
+  assert.equal(parseTimestampInput('1:2:3:4'), null);
 });
 
 

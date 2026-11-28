@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import {
   isValidJobId,
   parseCanonicalYouTubeUrl,
+  parseClipIndexParam,
   sanitizeDownloadSlug,
   validateCreateJobRequest,
+  validateRegenerateClipRequest,
   validateSelectedMoments,
 } from './validation.js';
 import {
@@ -943,6 +945,28 @@ test('validateCreateJobRequest requires a valid UUID customAudioTrackId when aud
     assert.equal(validCustomAudio.data.audioMode, 'custom-audio');
     assert.equal(validCustomAudio.data.customAudioTrackId, '550e8400-e29b-41d4-a716-446655440000');
   }
+});
+
+test('parseClipIndexParam and validateRegenerateClipRequest validate clip index and timestamp bounds', () => {
+  assert.equal(parseClipIndexParam('1'), 1);
+  assert.equal(parseClipIndexParam('20'), 20);
+  assert.equal(parseClipIndexParam('0'), null);
+  assert.equal(parseClipIndexParam('21'), null);
+  assert.equal(parseClipIndexParam('../1'), null);
+  assert.equal(parseClipIndexParam('1.5'), null);
+
+  const valid = validateRegenerateClipRequest({ startTime: 10, endTime: 40 }, 120);
+  assert.equal(valid.success, true);
+  if (valid.success) {
+    assert.equal(valid.data.startTime, 10);
+    assert.equal(valid.data.endTime, 40);
+  }
+
+  assert.equal(validateRegenerateClipRequest({ startTime: -1, endTime: 20 }, 120).success, false);
+  assert.equal(validateRegenerateClipRequest({ startTime: 30, endTime: 30 }, 120).success, false);
+  assert.equal(validateRegenerateClipRequest({ startTime: 30, endTime: 32 }, 120).success, false);
+  assert.equal(validateRegenerateClipRequest({ startTime: 0, endTime: 200 }, 300).success, false);
+  assert.equal(validateRegenerateClipRequest({ startTime: 100, endTime: 130 }, 120).success, false);
 });
 
 

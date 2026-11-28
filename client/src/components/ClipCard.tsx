@@ -11,10 +11,11 @@ import {
   Link2,
   Loader2,
   Pencil,
+  Scissors,
   X,
   Youtube,
 } from 'lucide-react';
-import { ApiError, publishClipToSocial } from '../api';
+import { ApiError, publishClipToSocial, regenerateClip } from '../api';
 import type {
   ClipItem,
   PublishClipResponse,
@@ -35,6 +36,7 @@ import {
   buildDefaultYouTubeDescription,
   buildDefaultYouTubeTitle,
 } from '../utils/youtubeMetadata';
+import { ClipEditModal } from './ClipEditModal';
 import { VerticalVideoPlayer } from './VerticalVideoPlayer';
 import { YouTubePublishModal } from './YouTubePublishModal';
 
@@ -42,10 +44,12 @@ interface ClipCardProps {
   clip: ClipItem;
   index: number;
   jobId: string | null;
+  sourceDuration?: number;
   sourceCopyright: SourceCopyrightInfo | null;
   socialAccounts: SocialAccountsState | null;
   youtubePrivacy: YouTubePrivacyStatus;
   onOpenAccounts: () => void;
+  onClipUpdated: (clipIndex: number, updatedClip: ClipItem, sourceDuration?: number) => void;
 }
 
 const SOCIAL_GUIDES: Record<
@@ -76,10 +80,12 @@ export function ClipCard({
   clip,
   index,
   jobId,
+  sourceDuration,
   sourceCopyright,
   socialAccounts,
   youtubePrivacy,
   onOpenAccounts,
+  onClipUpdated,
 }: ClipCardProps) {
   const [copied, setCopied] = useState(false);
   const [activeGuide, setActiveGuide] = useState<SocialPlatform | null>(null);
@@ -88,6 +94,11 @@ export function ClipCard({
     Partial<Record<SocialPlatform, PublishClipResponse>>
   >({});
   const [publishError, setPublishError] = useState<string | null>(null);
+
+  // Clip timestamp editor modal state
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [regenerateError, setRegenerateError] = useState<string | null>(null);
 
   // Editable YouTube Shorts metadata (100-char title with hashtags + 5000-char description with viral hashtags)
   const [isYouTubeModalOpen, setIsYouTubeModalOpen] = useState(false);
@@ -104,6 +115,26 @@ export function ClipCard({
   useEffect(() => {
     setClipYoutubePrivacy(youtubePrivacy);
   }, [youtubePrivacy]);
+
+  const handleRegenerateClip = async (startTime: number, endTime: number) => {
+    if (!jobId) return;
+    setRegenerateError(null);
+    setIsRegenerating(true);
+    try {
+      const response = await regenerateClip(jobId, index + 1, { startTime, endTime });
+      onClipUpdated(index, response.clip, response.sourceDuration);
+      setPublishedResults({});
+      setIsEditModalOpen(false);
+    } catch (err) {
+      const message =
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : 'Unable to regenerate this clip. Please try again.';
+      setRegenerateError(message);
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
 
   const virality = getViralityLabel(clip.score);
   const downloadUrl = buildClipDownloadUrl(clip);
@@ -242,17 +273,33 @@ export function ClipCard({
           {youtubeDescription}
         </p>
 
-        <button
-          type="button"
-          onClick={() => {
-            setPublishError(null);
-            setIsYouTubeModalOpen(true);
-          }}
-          className="mt-3 inline-flex items-center gap-1.5 self-start rounded-lg border border-white/[0.1] bg-white/[0.03] px-2.5 py-1.5 text-xs font-medium text-fuchsia-300 hover:border-fuchsia-400/40 hover:bg-fuchsia-500/10 hover:text-fuchsia-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400"
-        >
-          <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-          <span>Edit YouTube Title &amp; Description</span>
-        </button>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {jobId && (
+            <button
+              type="button"
+              onClick={() => {
+                setRegenerateError(null);
+                setIsEditModalOpen(true);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.1] bg-white/[0.03] px-2.5 py-1.5 text-xs font-medium text-zinc-200 hover:border-fuchsia-400/40 hover:bg-fuchsia-500/10 hover:text-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400"
+            >
+              <Scissors className="h-3.5 w-3.5 text-fuchsia-300" aria-hidden="true" />
+              <span>Edit Timestamps</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => {
+              setPublishError(null);
+              setIsYouTubeModalOpen(true);
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.1] bg-white/[0.03] px-2.5 py-1.5 text-xs font-medium text-fuchsia-300 hover:border-fuchsia-400/40 hover:bg-fuchsia-500/10 hover:text-fuchsia-200 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400"
+          >
+            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Edit YouTube Details</span>
+          </button>
+        </div>
 
         {/* Primary actions: Download MP4 + Copy Description */}
         <div className="mt-4 grid grid-cols-2 gap-2.5">
@@ -454,6 +501,22 @@ export function ClipCard({
           })
         }
         onOpenAccounts={onOpenAccounts}
+      />
+
+      <ClipEditModal
+        isOpen={isEditModalOpen}
+        clip={clip}
+        clipNumber={index + 1}
+        sourceDuration={sourceDuration}
+        isRegenerating={isRegenerating}
+        error={regenerateError}
+        onClose={() => {
+          if (!isRegenerating) {
+            setIsEditModalOpen(false);
+            setRegenerateError(null);
+          }
+        }}
+        onRegenerate={(startTime, endTime) => void handleRegenerateClip(startTime, endTime)}
       />
     </article>
   );
