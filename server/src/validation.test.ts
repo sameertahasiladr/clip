@@ -42,6 +42,7 @@ import {
   extractBestStreams,
   extractIpFamilyFromGoogleVideoUrl,
   extractStreamCandidates,
+  isActivelyLiveBroadcast,
   isTrustedGoogleVideoStreamUrl,
   parseBestHlsVariantUrls,
   parseDescriptionChapters,
@@ -1003,6 +1004,77 @@ test('config and moment/clip validators support long videos up to 360 minutes (2
     21600
   );
   assert.equal(regenAtFiveHours.success, true);
+});
+
+test('isActivelyLiveBroadcast allows completed past live stream VODs and blocks active/upcoming streams', () => {
+  // Completed 4h 52m archived past live stream VOD (YouTube sets isLiveContent: true forever)
+  assert.equal(
+    isActivelyLiveBroadcast({
+      playabilityStatus: { status: 'OK' },
+      videoDetails: {
+        isLiveContent: true,
+        lengthSeconds: '17520',
+      },
+      microformat: {
+        playerMicroformatRenderer: {
+          liveBroadcastDetails: {
+            isLiveNow: false,
+            startTimestamp: '2026-11-27T10:00:00+00:00',
+            endTimestamp: '2026-11-27T14:52:00+00:00',
+          },
+        },
+      },
+    }),
+    false
+  );
+
+  // Completed archived VOD without microformat block
+  assert.equal(
+    isActivelyLiveBroadcast({
+      videoDetails: {
+        isLiveContent: true,
+        lengthSeconds: '17520',
+      },
+    }),
+    false
+  );
+
+  // Currently broadcasting live stream
+  assert.equal(
+    isActivelyLiveBroadcast({
+      videoDetails: {
+        isLive: true,
+        isLiveContent: true,
+        lengthSeconds: '0',
+      },
+    }),
+    true
+  );
+
+  assert.equal(
+    isActivelyLiveBroadcast({
+      videoDetails: {
+        isLiveContent: true,
+        lengthSeconds: '3600',
+      },
+      microformat: {
+        playerMicroformatRenderer: {
+          liveBroadcastDetails: {
+            isLiveNow: true,
+          },
+        },
+      },
+    }),
+    true
+  );
+
+  // Scheduled upcoming stream
+  assert.equal(
+    isActivelyLiveBroadcast({
+      playabilityStatus: { status: 'LIVE_STREAM_OFFLINE' },
+    }),
+    true
+  );
 });
 
 

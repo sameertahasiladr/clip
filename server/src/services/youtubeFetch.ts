@@ -670,6 +670,7 @@ interface InnertubePlayerData {
     channelId?: string;
     lengthSeconds?: string;
     shortDescription?: string;
+    isLive?: boolean;
     isLiveContent?: boolean;
   };
   microformat?: {
@@ -677,6 +678,11 @@ interface InnertubePlayerData {
       category?: string;
       ownerChannelName?: string;
       externalChannelId?: string;
+      liveBroadcastDetails?: {
+        isLiveNow?: boolean;
+        startTimestamp?: string;
+        endTimestamp?: string;
+      };
     };
   };
   captions?: {
@@ -696,6 +702,40 @@ export interface ExtractedStreamPair {
   audioUrl: string | null;
   height: number;
   isHls?: boolean;
+}
+
+/**
+ * Returns true ONLY when a YouTube video is currently broadcasting live (or an offline/upcoming live event).
+ * Completed/archived past live stream VODs have `isLiveContent: true` forever, so they MUST NOT be blocked
+ * once the broadcast has ended (`isLive !== true` and `liveBroadcastDetails.isLiveNow !== true`).
+ */
+export function isActivelyLiveBroadcast(player?: InnertubePlayerData | null): boolean {
+  if (!player) return false;
+
+  const playabilityStatus = player.playabilityStatus?.status;
+  if (playabilityStatus === 'LIVE_STREAM_OFFLINE') {
+    return true;
+  }
+
+  const videoDetails = player.videoDetails;
+  const broadcast = player.microformat?.playerMicroformatRenderer?.liveBroadcastDetails;
+
+  if (videoDetails?.isLive === true || broadcast?.isLiveNow === true) {
+    return true;
+  }
+
+  // Fallback for active streams where isLive wasn't populated: live content with 0 length and no endTimestamp
+  const lengthSec = Number(videoDetails?.lengthSeconds ?? 0);
+  if (
+    videoDetails?.isLiveContent === true &&
+    (!Number.isFinite(lengthSec) || lengthSec <= 0) &&
+    !broadcast?.endTimestamp &&
+    broadcast?.isLiveNow !== false
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -1021,7 +1061,7 @@ export async function fetchYouTubeVideoInfo(
     );
   }
 
-  if (webVideoDetails.isLiveContent) {
+  if (isActivelyLiveBroadcast(webPlayer)) {
     throw new Error('Live streams cannot be clipped. Wait until the broadcast ends.');
   }
 
