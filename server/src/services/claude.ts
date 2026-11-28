@@ -2,10 +2,30 @@ import { config } from '../config.js';
 import type { ClipLength, MomentSelection, TranscriptSegment } from '../types.js';
 import { validateSelectedMoments } from '../validation.js';
 
+const MAX_CLAUDE_TRANSCRIPT_CHARS = 140_000;
+
 function formatTranscriptForPrompt(segments: TranscriptSegment[]): string {
-  return segments
-    .map((seg) => `[${seg.start.toFixed(2)} - ${seg.end.toFixed(2)}] ${seg.text}`)
-    .join('\n');
+  const lines = segments.map((seg) => `[${seg.start.toFixed(2)} - ${seg.end.toFixed(2)}] ${seg.text}`);
+  const full = lines.join('\n');
+  if (full.length <= MAX_CLAUDE_TRANSCRIPT_CHARS) {
+    return full;
+  }
+
+  // For multi-hour (up to 360-minute) videos, sample consecutive windows evenly across the entire timeline
+  const windowCount = 24;
+  const maxCharsPerWindow = Math.floor(MAX_CLAUDE_TRANSCRIPT_CHARS / windowCount);
+  const sampled: string[] = [];
+
+  for (let w = 0; w < windowCount; w++) {
+    const startIdx = Math.floor((w / windowCount) * lines.length);
+    let chars = 0;
+    for (let i = startIdx; i < lines.length && chars < maxCharsPerWindow; i++) {
+      sampled.push(lines[i]);
+      chars += lines[i].length + 1;
+    }
+  }
+
+  return sampled.join('\n');
 }
 
 function extractJsonArray(rawText: string): unknown {

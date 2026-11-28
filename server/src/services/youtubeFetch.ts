@@ -1521,7 +1521,8 @@ export async function fetchYouTubeVideoInfo(
   }
 
   if (duration > config.maxVideoDurationSeconds) {
-    throw new Error('Videos longer than 60 minutes are not supported.');
+    const maxMinutes = Math.round(config.maxVideoDurationSeconds / 60);
+    throw new Error(`Videos longer than ${maxMinutes} minutes are not supported.`);
   }
 
   if (!oembed && !webVideoDetails.title && duration <= 0) {
@@ -1581,7 +1582,7 @@ async function streamUrlToLocalFile(params: {
       '-fsSL',
       '-4',
       '--max-time',
-      '300',
+      '1800',
       '--proxy',
       proxyUrl,
       '-A',
@@ -1594,7 +1595,7 @@ async function streamUrlToLocalFile(params: {
       '--',
       params.url,
     ];
-    await execFileAsync('curl', args, { timeout: 5 * 60_000 });
+    await execFileAsync('curl', args, { timeout: 30 * 60_000 });
     return;
   }
 
@@ -1609,7 +1610,7 @@ async function streamUrlToLocalFile(params: {
       ...(params.cookieHeader ? { Cookie: params.cookieHeader } : {}),
     },
     family,
-    timeoutMs: 5 * 60_000,
+    timeoutMs: 30 * 60_000,
     requireTrustedGoogleVideoRedirect: true,
   });
 
@@ -1696,7 +1697,7 @@ export async function downloadYouTubeStreamsToFile(params: {
           'copy',
           outputPath,
         ];
-    await execFileAsync('ffmpeg', ffmpegArgs, { timeout: 5 * 60_000 });
+    await execFileAsync('ffmpeg', ffmpegArgs, { timeout: 30 * 60_000 });
   } else if (!audioStreamUrl) {
     await streamUrlToLocalFile({
       url: videoStreamUrl,
@@ -1739,7 +1740,7 @@ export async function downloadYouTubeStreamsToFile(params: {
         '-shortest',
         outputPath,
       ],
-      { timeout: 120_000 }
+      { timeout: 15 * 60_000 }
     );
   }
 

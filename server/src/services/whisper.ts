@@ -7,8 +7,12 @@ import type { TranscriptSegment } from '../types.js';
 
 const execFileAsync = promisify(execFile);
 
+const WHISPER_CHUNK_SECONDS = 40 * 60; // 40 min at 32k mono MP3 (~9.6 MB, well below Whisper's 25 MB cap)
+
 /**
- * Extracts compressed mono speech audio (MP3) using ffmpeg, then transcribes with OpenAI Whisper API.
+ * Extracts compressed mono speech audio (MP3) in <=40-minute chunks using ffmpeg,
+ * then translates each chunk with OpenAI Whisper API and merges exact timestamps
+ * so long videos up to 360 minutes (6 hours) transcribe without hitting the 25 MB limit.
  */
 export async function transcribeWithWhisper(
   videoPath: string,
@@ -21,12 +25,12 @@ export async function transcribeWithWhisper(
   }
 
   const resolvedBase = path.resolve(jobDir);
-  const audioPath = path.resolve(jobDir, 'audio.mp3');
-  if (!audioPath.startsWith(resolvedBase + path.sep)) {
+  const chunkPattern = path.resolve(jobDir, 'audio-%03d.mp3');
+  if (!chunkPattern.startsWith(resolvedBase + path.sep)) {
     throw new Error('Invalid audio extraction path.');
   }
 
-  // Extract lightweight 16kHz mono MP3 suitable for Whisper API 25MB limit
+  // Extract lightweight 16kHz mono 32kbps MP3 chunks suitable for Whisper API 25MB limit
   await execFileAsync(
     'ffmpeg',
     [
@@ -39,49 +43,76 @@ export async function transcribeWithWhisper(
       '-ar',
       '16000',
       '-b:a',
-      '48k',
-      audioPath,
+      '32k',
+      '-f',
+      'segment',
+      '-segment_time',
+      String(WHISPER_CHUNK_SECONDS),
+      '-reset_timestamps',
+      '1',
+      chunkPattern,
     ],
-    { timeout: 5 * 60_000 }
+    { timeout: 15 * 60_000 }
   );
 
-  const audioBuffer = await fs.readFile(audioPath);
-  const formData = new FormData();
-  formData.append('file', new Blob([audioBuffer], { type: 'audio/mpeg' }), 'audio.mp3');
-  formData.append('model', 'whisper-1');
-  formData.append('response_format', 'verbose_json');
+  const files = (await fs.readdir(resolvedBase))
+    .filter((name) => /^audio-\d{3}\.mp3$/.test(name))
+    .sort();
 
-  // Use /v1/audio/translations so speech in any language always returns timestamped English captions
-  const response = await fetch('https://api.openai.com/v1/audio/translations', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.openaiApiKey}`,
-    },
-    body: formData,
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => '');
-    throw new Error(
-      `Whisper English translation failed (HTTP ${response.status}): ${errorText.slice(0, 200)}`
-    );
+  if (files.length === 0) {
+    throw new Error('Could not extract audio track for Whisper transcription.');
   }
 
-  const data = (await response.json()) as {
-    segments?: Array<{ start: number; end: number; text: string }>;
-  };
+  const allSegments: TranscriptSegment[] = [];
 
-  const segments = (data.segments ?? [])
-    .map((seg) => ({
-      start: Number(seg.start.toFixed(2)),
-      end: Number(seg.end.toFixed(2)),
-      text: seg.text.trim(),
-    }))
-    .filter((seg) => seg.end > seg.start && seg.text.length > 0);
+  for (let chunkIndex = 0; chunkIndex < files.length; chunkIndex++) {
+    const chunkPath = path.resolve(resolvedBase, files[chunkIndex]);
+    if (!chunkPath.startsWith(resolvedBase + path.sep)) {
+      throw new Error('Invalid audio chunk path.');
+    }
 
-  if (segments.length === 0) {
+    const audioBuffer = await fs.readFile(chunkPath);
+    if (audioBuffer.length < 1024) continue;
+
+    const formData = new FormData();
+    formData.append('file', new Blob([audioBuffer], { type: 'audio/mpeg' }), files[chunkIndex]);
+    formData.append('model', 'whisper-1');
+    formData.append('response_format', 'verbose_json');
+
+    // Use /v1/audio/translations so speech in any language always returns timestamped English captions
+    const response = await fetch('https://api.openai.com/v1/audio/translations', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.openaiApiKey}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      throw new Error(
+        `Whisper English translation failed (HTTP ${response.status}): ${errorText.slice(0, 200)}`
+      );
+    }
+
+    const data = (await response.json()) as {
+      segments?: Array<{ start: number; end: number; text: string }>;
+    };
+
+    const timeOffset = chunkIndex * WHISPER_CHUNK_SECONDS;
+    for (const seg of data.segments ?? []) {
+      const start = Number((seg.start + timeOffset).toFixed(2));
+      const end = Number((seg.end + timeOffset).toFixed(2));
+      const text = seg.text.trim();
+      if (end > start && text.length > 0) {
+        allSegments.push({ start, end, text });
+      }
+    }
+  }
+
+  if (allSegments.length === 0) {
     throw new Error('Whisper returned an empty transcript for this video.');
   }
 
-  return segments;
+  return allSegments;
 }

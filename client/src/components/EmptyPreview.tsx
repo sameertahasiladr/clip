@@ -28,7 +28,7 @@ const EXPORT_SPECS = [
   { label: 'Output resolution', value: '4K 2160 x 3840 (9:16)' },
   { label: 'Video & audio codec', value: 'H.264 High@5.2 + AAC' },
   { label: 'Clip lengths', value: '15s or 30s (±2s)' },
-  { label: 'Max source length', value: 'Up to 60 minutes' },
+  { label: 'Max source length', value: 'Up to 360 minutes (6 hrs)' },
 ] as const;
 
 export function EmptyPreview() {

@@ -204,7 +204,7 @@ async function getMockJobStatus(jobId: string): Promise<JobResponse> {
       step: 'Transcribing',
       progress: 35,
       clips: [],
-      error: 'Video exceeds the 60-minute limit or does not provide an accessible audio track.',
+      error: 'Video exceeds the 360-minute limit or does not provide an accessible audio track.',
     };
   }
 

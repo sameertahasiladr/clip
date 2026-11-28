@@ -163,7 +163,7 @@ export function HeroForm({
             </p>
           ) : (
             <p id="youtube-url-hint" className="text-xs text-zinc-500">
-              Supports youtube.com/watch, youtu.be, and youtube.com/shorts links up to 60 minutes.
+              Supports youtube.com/watch, youtu.be, and youtube.com/shorts links up to 360 minutes (6 hours).
             </p>
           )}
 

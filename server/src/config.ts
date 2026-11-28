@@ -50,6 +50,7 @@ export const config: ServerConfig = {
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET?.trim() ?? '',
   metaAppId: process.env.META_APP_ID?.trim() ?? '',
   metaAppSecret: process.env.META_APP_SECRET?.trim() ?? '',
-  maxVideoDurationSeconds: 60 * 60, // 60 minutes hard cap
+  maxVideoDurationSeconds:
+    (Number.parseInt(process.env.MAX_VIDEO_DURATION_MINUTES ?? '360', 10) || 360) * 60, // 360 minutes (6 hours) default cap
   rateLimitMaxPerHour: 5,
 };

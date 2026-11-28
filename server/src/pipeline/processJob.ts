@@ -84,7 +84,7 @@ async function probeLocalVideoInfo(
       'json',
       filePath,
     ],
-    { timeout: 15_000 }
+    { timeout: 30_000 }
   );
   const parsed = JSON.parse(stdout) as {
     format?: { duration?: string; bit_rate?: string };
@@ -95,7 +95,8 @@ async function probeLocalVideoInfo(
     throw new Error('Could not read downloaded video duration.');
   }
   if (seconds > config.maxVideoDurationSeconds) {
-    throw new Error('Videos longer than 60 minutes are not supported.');
+    const maxMinutes = Math.round(config.maxVideoDurationSeconds / 60);
+    throw new Error(`Videos longer than ${maxMinutes} minutes are not supported.`);
   }
   const rawBitrate = Number.parseInt(
     parsed.streams?.[0]?.bit_rate ?? parsed.format?.bit_rate ?? '0',
@@ -354,7 +355,7 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
           sourceWidth = probed.width;
           sourceHeight = probed.height;
         } catch (probeErr) {
-          if (probeErr instanceof Error && probeErr.message.includes('60 minutes')) {
+          if (probeErr instanceof Error && /longer than \d+ minutes/i.test(probeErr.message)) {
             throw probeErr;
           }
         }
@@ -446,8 +447,9 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
           );
         }
 
+        const maxMinutes = Math.round(config.maxVideoDurationSeconds / 60);
         throw new Error(
-          'Could not download this YouTube video on the server. Make sure the video is public, under 60 minutes, and not region- or age-restricted.'
+          `Could not download this YouTube video on the server. Make sure the video is public, under ${maxMinutes} minutes, and not region- or age-restricted.`
         );
       }
 
@@ -459,7 +461,7 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
           sourceWidth = probed.width;
           sourceHeight = probed.height;
         } catch (probeErr) {
-          if (probeErr instanceof Error && probeErr.message.includes('60 minutes')) {
+          if (probeErr instanceof Error && /longer than \d+ minutes/i.test(probeErr.message)) {
             throw probeErr;
           }
         }
@@ -698,7 +700,7 @@ export async function processClipJob(jobId: string, store: JobStore): Promise<vo
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unexpected processing failure.';
     const isExpectedUpstreamRestriction =
-      /YouTube blocked unauthenticated download|longer than 60 minutes|unavailable, private, or removed|could not be found or is set to private|Live streams cannot be clipped|Invalid YouTube URL/i.test(
+      /YouTube blocked unauthenticated download|longer than \d+ minutes|unavailable, private, or removed|could not be found or is set to private|Live streams cannot be clipped|Invalid YouTube URL/i.test(
         message
       );
 

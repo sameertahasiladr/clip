@@ -31,7 +31,7 @@ import {
   getClipFilename,
   triggerSynchronousDownload,
 } from '../utils/download';
-import { formatDuration, getViralityLabel } from '../utils/youtube';
+import { formatDuration, formatTimestamp, getViralityLabel } from '../utils/youtube';
 import {
   buildDefaultYouTubeDescription,
   buildDefaultYouTubeTitle,
@@ -247,7 +247,7 @@ export function ClipCard({
           <div className="flex items-center gap-2">
             <span className="font-mono tabular-nums">
               Clip {String(index + 1).padStart(2, '0')} · {formatDuration(clip.duration)}
-              {hasRange ? ` (${formatDuration(clip.startTime!)}–${formatDuration(clip.endTime!)})` : ''}
+              {hasRange ? ` (${formatTimestamp(clip.startTime!)}–${formatTimestamp(clip.endTime!)})` : ''}
             </span>
             {clip.width && clip.height ? (
               <span className="rounded bg-fuchsia-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-fuchsia-200 border border-fuchsia-400/25">

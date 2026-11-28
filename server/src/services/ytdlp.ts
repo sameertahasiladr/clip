@@ -200,7 +200,7 @@ async function buildYtDlpBaseArgs(
 
 /**
  * Fetches video metadata via yt-dlp without downloading the media file.
- * Enforces the 60-minute maximum duration limit.
+ * Enforces the configured maximum duration limit (default 360 minutes / 6 hours).
  */
 export async function fetchVideoMetadata(
   canonicalUrl: string,
@@ -229,7 +229,8 @@ export async function fetchVideoMetadata(
   }
 
   if (duration > config.maxVideoDurationSeconds) {
-    throw new Error('Videos longer than 60 minutes are not supported.');
+    const maxMinutes = Math.round(config.maxVideoDurationSeconds / 60);
+    throw new Error(`Videos longer than ${maxMinutes} minutes are not supported.`);
   }
 
   return {
@@ -388,7 +389,7 @@ export async function downloadVideo(
           '--',
           canonicalUrl,
         ],
-        { maxBuffer: 20 * 1024 * 1024, timeout: 10 * 60_000 }
+        { maxBuffer: 50 * 1024 * 1024, timeout: 45 * 60_000 }
       );
 
       const downloaded = await locateDownloadedSourceFile(jobDir);
@@ -508,7 +509,7 @@ export async function tryFetchYouTubeCaptions(
         '--',
         canonicalUrl,
       ],
-      { maxBuffer: 10 * 1024 * 1024, timeout: 60_000 }
+      { maxBuffer: 25 * 1024 * 1024, timeout: 120_000 }
     );
 
     const files = await fs.readdir(jobDir);

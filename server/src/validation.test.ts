@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { config } from './config.js';
 import {
   isValidJobId,
   parseCanonicalYouTubeUrl,
@@ -967,6 +968,41 @@ test('parseClipIndexParam and validateRegenerateClipRequest validate clip index 
   assert.equal(validateRegenerateClipRequest({ startTime: 30, endTime: 32 }, 120).success, false);
   assert.equal(validateRegenerateClipRequest({ startTime: 0, endTime: 200 }, 300).success, false);
   assert.equal(validateRegenerateClipRequest({ startTime: 100, endTime: 130 }, 120).success, false);
+});
+
+test('config and moment/clip validators support long videos up to 360 minutes (21600s)', () => {
+  assert.equal(config.maxVideoDurationSeconds, 360 * 60);
+
+  const moments = validateSelectedMoments(
+    [
+      {
+        start: 18500,
+        end: 18530,
+        title: '5-Hour Podcast Breakthrough',
+        caption: 'Key insight from hour 5 #shorts',
+        score: 94,
+      },
+      {
+        start: 21560,
+        end: 21590,
+        title: 'Final Closing Takeaway',
+        caption: 'Closing punchline near 360 minutes #shorts',
+        score: 91,
+      },
+    ],
+    30,
+    2,
+    21600
+  );
+  assert.equal(moments.length, 2);
+  assert.equal(moments[0].start, 18500);
+  assert.equal(moments[1].end, 21590);
+
+  const regenAtFiveHours = validateRegenerateClipRequest(
+    { startTime: 21540, endTime: 21595 },
+    21600
+  );
+  assert.equal(regenAtFiveHours.success, true);
 });
 
 
